@@ -1,0 +1,18 @@
+# Netlify build settings for SATGene AI (Vite + React + Functions)
+[build]
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+# Route the frontend's /api/plan call to the serverless function.
+# This MUST come before the SPA catch-all below, or the catch-all swallows it.
+[[redirects]]
+  from = "/api/plan"
+  to = "/.netlify/functions/plan"
+  status = 200
+
+# Single-page-app fallback so refreshes on any path load index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
