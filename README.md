@@ -1,4 +1,4 @@
-# SATGene AI
+# SATGene
 
 A Digital SAT practice **hub, tracker, analytics, and study planner**. It links out to
 official and vendor practice — it does not copy their questions.
@@ -75,7 +75,51 @@ When you port your Node/Express + SQLite backend:
 
 ---
 
-## Enabling the AI planner (Gemini)
+## User accounts (Firebase Auth + Firestore)
+
+SATGene uses Firebase for login and per-user data. Login runs in the browser (no
+server), and each user's data is saved to Cloud Firestore under `users/{uid}`,
+isolated by security rules. This is the Netlify-friendly equivalent of the
+server-side auth used on the Railway build — same result, no backend.
+
+### One-time Firebase setup (all in the browser)
+
+1. Go to https://console.firebase.google.com and **Add project** (name it e.g. `satgene`).
+2. **Build → Authentication → Get started.** Under **Sign-in method**, enable:
+   - **Google** (pick a support email)
+   - **Email/Password**
+3. **Build → Firestore Database → Create database** (Production mode, pick a region).
+   Then open the **Rules** tab, paste the contents of `firestore.rules` from this repo,
+   and **Publish**.
+4. **Project settings (gear icon) → General → Your apps → Web (`</>`)**. Register an app.
+   Firebase shows a config object with `apiKey`, `authDomain`, etc. Keep it open.
+5. **Authentication → Settings → Authorized domains → Add domain.** Add your Netlify
+   site domain (e.g. `your-site.netlify.app`). Without this, Google sign-in is blocked.
+
+### Add the config to Netlify
+
+In Netlify → **Site settings → Environment variables**, add these six (values from step 4):
+
+```
+VITE_FIREBASE_API_KEY
+VITE_FIREBASE_AUTH_DOMAIN
+VITE_FIREBASE_PROJECT_ID
+VITE_FIREBASE_STORAGE_BUCKET
+VITE_FIREBASE_MESSAGING_SENDER_ID
+VITE_FIREBASE_APP_ID
+```
+
+Then **Deploys → Trigger deploy → Deploy site** so the build picks them up.
+
+(These Firebase web values are not secrets — they're safe in the browser. Security
+comes from the Firestore rules and the sign-in methods you enabled.)
+
+### Local development
+
+Copy `.env.example` to `.env` and fill in the same six values. `.env` is gitignored.
+Run `npm run dev` as usual.
+
+
 
 The "Generate AI plan" button calls `POST /api/plan`, which Netlify routes to the
 serverless function at `netlify/functions/plan.js`. That function calls Google Gemini

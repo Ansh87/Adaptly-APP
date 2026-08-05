@@ -1,14 +1,16 @@
 import React, { useState, useMemo, useEffect } from "react";
+import Login from "./Login.jsx";
+import { watchAuth, logout, loadUserData, saveUserData } from "./firebase";
 
 /**
- * SATGene AI — Digital SAT Practice, Analytics & Study Planner
+ * SATGene — Digital SAT Practice, Analytics & Study Planner
  * -----------------------------------------------------------------
  * DESIGN NOTE ON "PULLING TESTS FROM VENDORS":
  * You cannot legally copy questions from Bluebook, Khan Academy,
  * College Board Question Bank, UWorld, Kaplan, or Princeton Review.
  * None expose a public content API, and their questions are
  * copyrighted (College Board treats test-prep use as commercial).
- * So SATGene AI does NOT reinvent the test. It is the HUB + TRACKER
+ * So SATGene does NOT reinvent the test. It is the HUB + TRACKER
  * + ANALYTICS + AI PLANNER layer. The student LAUNCHES the real
  * official test (Bluebook is the actual SAT engine), then logs
  * results here for analysis. The one place we can add our own
@@ -176,30 +178,9 @@ const C = {
 const FONT_DISPLAY = '"Fraunces", "Georgia", serif';
 const FONT_BODY = '"Inter", system-ui, -apple-system, sans-serif';
 
-// ---------- Persistence: save to the browser (localStorage) ----------
-// Data survives refreshes and closing the tab, stored on THIS device/browser.
-// It is NOT synced across devices. Use Export/Import (Manage data panel) for backups.
-const STORE_PREFIX = "satgene:";
-
-function usePersistentState(key, initial) {
-  const [value, setValue] = useState(() => {
-    try {
-      const raw = localStorage.getItem(STORE_PREFIX + key);
-      return raw != null ? JSON.parse(raw) : initial;
-    } catch {
-      return initial;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORE_PREFIX + key, JSON.stringify(value));
-    } catch {
-      /* storage full or blocked (e.g. private mode) — silently keep in memory */
-    }
-  }, [key, value]);
-  return [value, setValue];
-}
-
+// ---------- Default seed data for brand-new accounts ----------
+// Once a user signs in, their real data loads from Firestore. These defaults only
+// show for a fresh account with no saved document yet.
 const DEFAULT_GOAL = { current: 1200, target: 1450, testDate: "2026-10-03" };
 const DEFAULT_ATTEMPTS = [
   { id: 1, date: "2026-06-14", source: "Bluebook", rw: 620, math: 640, minutes: 130, confidence: 3, notes: "Ran low on time in Math Module 2." },
@@ -210,10 +191,78 @@ const DEFAULT_MISTAKES = [
 
 // ================================================================
 export default function SATGeneAI() {
+  const [authState, setAuthState] = useState("loading"); // loading | out | in
+  const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    const unsub = watchAuth((u) => {
+      setUser(u);
+      setAuthState(u ? "in" : "out");
+    });
+    return unsub;
+  }, []);
+
+  if (authState === "loading") {
+    return (
+      <div style={{ minHeight: "100vh", background: C.paper, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: FONT_BODY, color: C.ink2 }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 30 }}>SATGene</div>
+          <div style={{ marginTop: 10, fontSize: 14 }}>Loading…</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (authState === "out") return <Login />;
+
+  return <AppShell user={user} />;
+}
+
+function AppShell({ user }) {
   const [tab, setTab] = useState("hub");
-  const [goal, setGoal] = usePersistentState("goal", DEFAULT_GOAL);
-  const [attempts, setAttempts] = usePersistentState("attempts", DEFAULT_ATTEMPTS);
-  const [mistakes, setMistakes] = usePersistentState("mistakes", DEFAULT_MISTAKES);
+  const [goal, setGoal] = useState(DEFAULT_GOAL);
+  const [attempts, setAttempts] = useState(DEFAULT_ATTEMPTS);
+  const [mistakes, setMistakes] = useState(DEFAULT_MISTAKES);
+  const [dataLoaded, setDataLoaded] = useState(false);
+  const [syncState, setSyncState] = useState("idle"); // idle | saving | saved | error
+
+  // Load this user's data from Firestore once on sign-in.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await loadUserData(user.uid);
+        if (cancelled) return;
+        if (data) {
+          if (data.goal) setGoal(data.goal);
+          if (Array.isArray(data.attempts)) setAttempts(data.attempts);
+          if (Array.isArray(data.mistakes)) setMistakes(data.mistakes);
+        }
+        // If no data doc exists yet, the defaults stay and get saved on first change.
+      } catch (e) {
+        console.error("Load failed:", e);
+      } finally {
+        if (!cancelled) setDataLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user.uid]);
+
+  // Save to Firestore whenever data changes (after the initial load completes).
+  useEffect(() => {
+    if (!dataLoaded) return;
+    setSyncState("saving");
+    const t = setTimeout(async () => {
+      try {
+        await saveUserData(user.uid, { goal, attempts, mistakes });
+        setSyncState("saved");
+      } catch (e) {
+        console.error("Save failed:", e);
+        setSyncState("error");
+      }
+    }, 600); // debounce so rapid edits don't spam writes
+    return () => clearTimeout(t);
+  }, [goal, attempts, mistakes, dataLoaded, user.uid]);
 
   return (
     <div style={{ background: C.paper, minHeight: "100vh", fontFamily: FONT_BODY, color: C.ink }}>
@@ -230,7 +279,7 @@ export default function SATGeneAI() {
         @media (prefers-reduced-motion: reduce){ .sg-card, .sg-tab { transition: none; } }
       `}</style>
 
-      <Header goal={goal} attempts={attempts} />
+      <Header goal={goal} attempts={attempts} user={user} syncState={syncState} />
 
       <Nav tab={tab} setTab={setTab} />
 
@@ -250,7 +299,7 @@ export default function SATGeneAI() {
       </main>
 
       <footer style={{ borderTop: `1px solid ${C.line}`, padding: "24px 20px", textAlign: "center", fontSize: 13, color: C.ink2 }}>
-        SATGene AI is a planning, tracking & analytics layer. It links to official and vendor practice —
+        SATGene is a planning, tracking & analytics layer. It links to official and vendor practice —
         it does not copy their questions. SAT® is a trademark of the College Board, which is not affiliated with this tool.
       </footer>
     </div>
@@ -258,7 +307,7 @@ export default function SATGeneAI() {
 }
 
 // ---------- Header ----------
-function Header({ goal, attempts }) {
+function Header({ goal, attempts, user, syncState }) {
   const daysLeft = useMemo(() => {
     const d = Math.ceil((new Date(goal.testDate) - new Date()) / 86400000);
     return d;
@@ -267,12 +316,30 @@ function Header({ goal, attempts }) {
   const latestTotal = latest ? latest.rw + latest.math : goal.current;
   const gap = goal.target - latestTotal;
 
+  const syncLabel = { saving: "Saving…", saved: "Saved ✓", error: "Save failed", idle: "" }[syncState] || "";
+  const syncColor = syncState === "error" ? "#B4443A" : C.accent;
+
   return (
     <header style={{ borderBottom: `1px solid ${C.line}`, background: C.card }}>
+      {/* account bar */}
+      <div style={{ borderBottom: `1px solid ${C.soft}`, background: C.paper }}>
+        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "8px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, fontSize: 13 }}>
+          <span style={{ color: C.ink2 }}>
+            {user?.displayName ? `${user.displayName} · ` : ""}{user?.email}
+          </span>
+          <span style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            {syncLabel && <span style={{ color: syncColor, fontWeight: 600, fontSize: 12 }}>{syncLabel}</span>}
+            <button onClick={logout} style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 8, padding: "4px 12px", fontSize: 13, fontWeight: 600, color: C.ink2 }}>
+              Sign out
+            </button>
+          </span>
+        </div>
+      </div>
+
       <div style={{ maxWidth: 1080, margin: "0 auto", padding: "22px 20px", display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
         <div>
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 30, letterSpacing: -0.5, lineHeight: 1 }}>
-            SATGene<span style={{ color: C.accent }}> AI</span>
+            SATGene
           </div>
           <div style={{ fontSize: 13, color: C.ink2, marginTop: 6 }}>
             Digital SAT practice hub · analytics · study planner
