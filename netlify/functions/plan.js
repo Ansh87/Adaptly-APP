@@ -1,9 +1,17 @@
 // Netlify Function: POST /api/plan
 // Generates a SAT or Practice study plan with Google Gemini. The API key stays
-// server-side (set GEMINI_API_KEY in Netlify → Environment variables).
+// server-side (set GEMINI_API_KEY in Netlify → Environment variables) and is never
+// sent to the browser or logged.
+//
+// Model selection: defaults to gemini-2.5-flash (gemini-2.0-flash was retired
+// June 1, 2026). gemini-2.5-flash is itself scheduled for retirement, so the model
+// ID is read from the GEMINI_MODEL env var when present — you can migrate to a newer
+// model (e.g. gemini-2.5-flash-lite or a 3.x model) by changing that variable in
+// Netlify and redeploying, with NO code change.
 //
 // Request body:  { planKind, goal:{target,nextDate}, latest, supportingLatest, attempts, mistakes }
 // Response body: { summary, focus[], week[], practiceSchedule, nextAction }
+//   On upstream failure the frontend falls back to a rule-based plan.
 
 export default async (req) => {
   if (req.method !== "POST") {
@@ -12,7 +20,9 @@ export default async (req) => {
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return json({ error: "GEMINI_API_KEY is not set on the server" }, 500);
+    // Never log the key; this branch means it's simply absent.
+    console.error("[plan] GEMINI_API_KEY is not set on the server");
+    return json({ error: "AI service is not configured." }, 500);
   }
 
   let body;
@@ -59,12 +69,15 @@ Respond with ONLY a JSON object, no markdown or code fences, exactly:
   "nextAction": "one concrete recommended next action"
 }`;
 
-  const model = "gemini-2.0-flash";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  // Model is configurable via env var; defaults to the current flash model.
+  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const endpoint =
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent` +
+    `?key=${encodeURIComponent(apiKey)}`;
 
   let aiRes;
   try {
-    aiRes = await fetch(url, {
+    aiRes = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -73,19 +86,38 @@ Respond with ONLY a JSON object, no markdown or code fences, exactly:
       }),
     });
   } catch (e) {
-    return json({ error: "Could not reach Gemini" }, 502);
+    console.error(`[plan] Network error reaching Gemini (model=${model}):`, e?.message || e);
+    return json({ error: "The AI service could not be reached. A rule-based plan was saved instead." }, 502);
   }
 
   if (!aiRes.ok) {
-    const detail = await aiRes.text().catch(() => "");
-    return json({ error: `Gemini error ${aiRes.status}: ${detail.slice(0, 200)}` }, 502);
+    // Read the full upstream error and log it SERVER-SIDE only. Strip the key defensively
+    // in case it ever appears in an echoed URL, and never return the raw body to the client.
+    const rawDetail = await aiRes.text().catch(() => "");
+    const safeDetail = rawDetail.replace(new RegExp(encodeURIComponent(apiKey), "g"), "[REDACTED]").replace(new RegExp(apiKey, "g"), "[REDACTED]");
+    console.error(`[plan] Gemini error ${aiRes.status} (model=${model}): ${safeDetail}`);
+
+    // Model retired / not found: make the model name obvious in the server log.
+    if (aiRes.status === 404 || /not\s*found|no longer available|is not supported|deprecated|retired/i.test(rawDetail)) {
+      console.error(`[plan] MODEL UNAVAILABLE — the configured model "${model}" may be retired or unsupported. Update the GEMINI_MODEL env var to a current model and redeploy.`);
+      return json({ error: "The AI model is currently unavailable. A rule-based plan was saved instead." }, 502);
+    }
+
+    // Rate limit / quota.
+    if (aiRes.status === 429) {
+      return json({ error: "The AI service is temporarily unavailable. A rule-based plan was saved instead. Please try the AI plan again later." }, 429);
+    }
+
+    // Any other upstream error: generic user-facing message, details stay in the log.
+    return json({ error: "The AI service returned an error. A rule-based plan was saved instead." }, 502);
   }
 
   let data;
   try {
     data = await aiRes.json();
   } catch {
-    return json({ error: "Gemini returned unreadable data" }, 502);
+    console.error(`[plan] Gemini returned unreadable data (model=${model})`);
+    return json({ error: "The AI service returned unreadable data. A rule-based plan was saved instead." }, 502);
   }
 
   const text =
@@ -96,7 +128,8 @@ Respond with ONLY a JSON object, no markdown or code fences, exactly:
   try {
     plan = JSON.parse(clean);
   } catch {
-    return json({ error: "Gemini did not return valid JSON" }, 502);
+    console.error(`[plan] Gemini did not return valid JSON (model=${model})`);
+    return json({ error: "The AI service returned an unexpected format. A rule-based plan was saved instead." }, 502);
   }
 
   // Basic shape guard so the frontend never crashes.

@@ -1294,13 +1294,14 @@ function PlanPanel({ kind, latest, supportingLatest, target, onTarget, nextDate,
           mistakes,
         }),
       });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Planner responded ${res.status}`); }
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || "The AI service is temporarily unavailable. A rule-based plan was saved instead. Please try the AI plan again later."); }
       const data = await res.json();
       // Merge AI text fields with computed numbers so the saved plan is complete.
       const base = buildInstant();
       saveAndShow({ ...base, ...data, currentScore: base.currentScore }, "AI");
     } catch (e) {
-      setError(`Couldn't generate the AI plan (${e.message}). Saved a rule-based plan instead.`);
+      // The server returns a clean, student-friendly message; show it as-is.
+      setError(e.message);
       saveAndShow(buildInstant(), "Instant");
     } finally {
       setLoading(false);
