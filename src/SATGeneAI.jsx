@@ -365,27 +365,66 @@ function AppShell({ user }) {
     "Student";
 
   return (
-    <div style={{ background: C.paper, minHeight: "100vh", fontFamily: FONT_BODY, color: C.ink }}>
+    <div className="sg-app" style={{ background: C.paper, minHeight: "100vh", fontFamily: FONT_BODY, color: C.ink }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Inter:wght@400;500;600;700&display=swap');
-        * { box-sizing: border-box; }
+        *, *::before, *::after { box-sizing: border-box; }
         button { font-family: inherit; cursor: pointer; }
+        .sg-app { width: 100%; max-width: 100%; overflow-x: hidden; }
         .sg-tab { transition: all .15s ease; }
         .sg-tab:hover { color: ${C.ink}; }
         .sg-card { transition: transform .15s ease, box-shadow .15s ease; }
         .sg-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(18,32,58,.10); }
-        input, select, textarea { font-family: inherit; }
+        input, select, textarea { font-family: inherit; max-width: 100%; }
         a { color: ${C.accent}; }
         .sg-focus:focus-visible { outline: 2px solid ${C.accent}; outline-offset: 2px; border-radius: 6px; }
-        @media (max-width: 560px){ .sg-name-text { display: none; } }
+
+        /* Responsive page container: replaces fixed 20px desktop padding on mobile */
+        .sg-container { width: 100%; max-width: 1080px; margin-inline: auto; padding-inline: 20px; }
+        /* Auto-fit card grids: min column basis shrinks on mobile so nothing overflows */
+        .sg-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+        .sg-grid > * { min-width: 0; }
+        /* Form field grids */
+        .sg-fields { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+        .sg-fields > * { min-width: 0; }
+        /* flex children that must be allowed to shrink */
+        .sg-min0 { min-width: 0; }
+
+        .sg-name-text { }
+
+        @media (max-width: 720px) {
+          .sg-more-grid { grid-template-columns: 1fr !important; }
+        }
+        @media (max-width: 640px) {
+          .sg-container { padding-inline: 16px; }
+          .sg-grid { grid-template-columns: 1fr; }
+          .sg-fields { grid-template-columns: 1fr; }
+          .sg-btn-row { flex-direction: column; align-items: stretch; }
+          .sg-btn-row > button, .sg-btn-row > label { width: 100%; }
+        }
+        @media (max-width: 560px) {
+          .sg-name-btn { display: none; }
+        }
+        @media (max-width: 359px) {
+          .sg-container { padding-inline: 12px; }
+        }
+        .sg-h2 { font-size: 26px; }
+        @media (max-width: 640px) {
+          .sg-h2 { font-size: 22px; }
+          .sg-sim-timer { font-size: 48px !important; }
+        }
         @media (prefers-reduced-motion: reduce){ .sg-card, .sg-tab { transition: none; } }
+
+        /* Hide scrollbar on the horizontal nav while keeping it scrollable */
+        .sg-nav-scroll { overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+        .sg-nav-scroll::-webkit-scrollbar { display: none; }
       `}</style>
 
       <Header attempts={attempts} goal={goal} user={user} syncState={syncState} displayName={displayName} setTab={setTab} />
 
       <Nav tab={tab} setTab={setTab} />
 
-      <main style={{ maxWidth: 1080, margin: "0 auto", padding: "0 20px 40px" }}>
+      <main className="sg-container" style={{ paddingBottom: 40 }}>
         {tab === "hub" && <Hub />}
         {tab === "tracker" && <Tracker attempts={attempts} setAttempts={setAttempts} />}
         {tab === "mistakes" && <Mistakes mistakes={mistakes} setMistakes={setMistakes} attempts={attempts} />}
@@ -447,26 +486,60 @@ function Header({ goal, attempts, user, syncState, displayName, setTab }) {
 
   return (
     <header style={{ borderBottom: `1px solid ${C.line}`, background: C.card }}>
-      {/* account bar — light, no pill */}
+      <style>{`
+        /* Slim account utility row (~42px) */
+        .sg-acct-row { display: flex; justify-content: flex-end; align-items: center; gap: 8px; height: 42px; }
+        /* Reserve space for the save status so account controls never shift */
+        .sg-save-slot { display: inline-flex; justify-content: flex-end; align-items: center; min-width: 84px; }
+
+        /* Main header row: logo left, scores right, tight vertical spacing */
+        .sg-header-main { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding-top: 6px; padding-bottom: 12px; }
+        .sg-logo { font-size: 28px; }
+        .sg-tagline { font-size: 13px; color: ${C.ink2}; margin-top: 3px; }
+
+        /* Content-sized score cards via flexible auto-fit grid */
+        .sg-scores { display: grid; grid-auto-flow: column; grid-auto-columns: max-content; gap: 10px; justify-content: end; }
+
+        /* Tablet / narrow desktop: wrap to 3 + 2 instead of squeezing */
+        @media (max-width: 900px) {
+          .sg-header-main { align-items: flex-start; }
+          .sg-scores { grid-auto-flow: row; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-columns: auto; width: 100%; }
+          .sg-scores > * { min-width: 0; }
+          .sg-stat { min-width: 0 !important; }
+          /* Superscore sits in row 1 col 3; Target & Gap wrap to row 2 */
+          .sg-super-card { min-width: 0 !important; }
+        }
+        @media (max-width: 640px) {
+          .sg-header-main { align-items: center; padding-bottom: 12px; }
+          .sg-logo { font-size: 24px; }
+          .sg-tagline { display: none; }
+          .sg-scores { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .sg-super-card { grid-column: 1 / -1; }
+        }
+        @media (max-width: 340px) {
+          .sg-scores { grid-template-columns: 1fr; }
+        }
+      `}</style>
+
+      {/* account utility row — slim, no divider, reserved save-status width */}
       <div style={{ background: C.card }}>
-        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "10px 20px 4px", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12 }}>
-          <SaveStatus syncState={syncState} />
-          <span style={{ width: 1, height: 18, background: C.line }} aria-hidden="true" />
+        <div className="sg-container sg-acct-row">
+          <span className="sg-save-slot"><SaveStatus syncState={syncState} /></span>
           <AccountArea user={user} displayName={displayName} setTab={setTab} />
         </div>
       </div>
 
-      <div style={{ maxWidth: 1080, margin: "0 auto", padding: "12px 20px 22px", display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
-        <div>
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 30, letterSpacing: -0.5, lineHeight: 1 }}>
+      <div className="sg-container sg-header-main">
+        <div className="sg-min0">
+          <div className="sg-logo" style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, letterSpacing: -0.5, lineHeight: 1 }}>
             SATGene
           </div>
-          <div style={{ fontSize: 13, color: C.ink2, marginTop: 6 }}>
+          <div className="sg-tagline">
             Digital SAT practice hub · analytics · study planner
           </div>
         </div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Stat label="Days to SAT Test" value={daysValue} accent={daysAccent} small={days == null} />
+        <div className="sg-scores">
+          <Stat label="Days to SAT" value={daysValue} accent={daysAccent} small={days == null} />
           <Stat label="Latest Score" value={latestScore == null ? "No score" : latestScore} sub={source} small={latestScore == null} />
           <SuperscoreStat superscore={superscore} fmtShort={fmtShort} />
           <Stat label="Target" value={target} />
@@ -477,23 +550,26 @@ function Header({ goal, attempts, user, syncState, displayName, setTab }) {
   );
 }
 
-// Superscore header card (wider, two-line detail)
+// Superscore header card (slightly wider, two-line detail, abbreviated dates)
 function SuperscoreStat({ superscore, fmtShort }) {
+  const fullDates = superscore
+    ? `R&W ${superscore.rw} on ${new Date(superscore.rwDate).toLocaleDateString()} · Math ${superscore.math} on ${new Date(superscore.mathDate).toLocaleDateString()}`
+    : undefined;
   if (!superscore) {
     return (
-      <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, padding: "8px 14px", minWidth: 120, background: C.paper }}>
-        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: C.ink2 }}>Superscore</div>
-        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 16, color: C.ink2, lineHeight: 1.15, marginTop: 3 }}>Not available</div>
-        <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 2 }}>Requires 2 SAT tests</div>
+      <div className="sg-super-card" style={{ border: `1px solid ${C.line}`, borderRadius: 12, padding: "10px 13px", background: C.paper }}>
+        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: C.ink2, whiteSpace: "nowrap" }}>Superscore</div>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 15, color: C.ink2, lineHeight: 1.15, marginTop: 3 }}>Not available</div>
+        <div style={{ fontSize: 11, color: C.ink2, marginTop: 2 }}>Requires 2 SAT tests</div>
       </div>
     );
   }
   return (
-    <div style={{ border: `1px solid ${C.accent}`, borderRadius: 12, padding: "8px 14px", minWidth: 150, background: C.paper }}>
-      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: C.accent, fontWeight: 700 }}>Superscore</div>
-      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 24, color: C.ink, lineHeight: 1.1 }}>{superscore.total}</div>
-      <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 2 }}>R&W {superscore.rw} · {fmtShort(superscore.rwDate)}</div>
-      <div style={{ fontSize: 10.5, color: C.ink2 }}>Math {superscore.math} · {fmtShort(superscore.mathDate)}</div>
+    <div className="sg-super-card" title={fullDates} style={{ border: `1px solid ${C.accent}`, borderRadius: 12, padding: "10px 13px", background: C.paper }}>
+      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: C.accent, fontWeight: 700, whiteSpace: "nowrap" }}>Superscore</div>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 29, color: C.ink, lineHeight: 1.1, marginTop: 1 }}>{superscore.total}</div>
+      <div style={{ fontSize: 11, color: C.ink2, marginTop: 2, overflowWrap: "anywhere", lineHeight: 1.3 }}>R&W {superscore.rw} · {fmtShort(superscore.rwDate)}</div>
+      <div style={{ fontSize: 11, color: C.ink2, overflowWrap: "anywhere", lineHeight: 1.3 }}>Math {superscore.math} · {fmtShort(superscore.mathDate)}</div>
     </div>
   );
 }
@@ -543,11 +619,11 @@ function AccountArea({ user, displayName, setTab }) {
   }, [open]);
 
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
       <button
         onClick={() => setTab("more")}
-        className="sg-focus"
-        style={{ background: "none", border: "none", padding: "2px 4px", fontSize: 13.5, fontWeight: 600, color: C.ink, cursor: "pointer" }}
+        className="sg-focus sg-name-btn"
+        style={{ background: "none", border: "none", padding: "2px 2px", fontSize: 13.5, fontWeight: 600, color: C.ink, cursor: "pointer" }}
         title="Open your profile"
       >
         <span className="sg-name-text">{firstName}</span>
@@ -566,10 +642,10 @@ function AccountArea({ user, displayName, setTab }) {
         </button>
 
         {open && (
-          <div role="menu" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 232, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, boxShadow: "0 10px 34px rgba(18,32,58,.16)", overflow: "hidden", zIndex: 60 }}>
+          <div role="menu" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: "min(280px, calc(100vw - 24px))", background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, boxShadow: "0 10px 34px rgba(18,32,58,.16)", overflow: "hidden", zIndex: 60 }}>
             <div style={{ padding: "14px 16px" }}>
-              <div style={{ fontSize: 14.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</div>
-              <div style={{ fontSize: 12.5, color: C.ink2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</div>
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: C.ink, overflowWrap: "anywhere" }}>{displayName}</div>
+              <div style={{ fontSize: 12.5, color: C.ink2, overflowWrap: "anywhere" }}>{user?.email}</div>
             </div>
             <div style={{ height: 1, background: C.soft }} />
             <div style={{ padding: 6 }}>
@@ -653,10 +729,10 @@ function IconSignOut() { return (<svg style={iconWrap} viewBox="0 0 24 24" fill=
 
 function Stat({ label, value, accent = C.ink, sub, small = false }) {
   return (
-    <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, padding: "8px 14px", minWidth: 92, background: C.paper }}>
-      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: C.ink2 }}>{label}</div>
-      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: small ? 16 : 24, color: accent, lineHeight: 1.15, marginTop: small ? 3 : 0 }}>{value}</div>
-      {sub && <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 2, fontWeight: 500 }}>{sub}</div>}
+    <div className="sg-stat" style={{ border: `1px solid ${C.line}`, borderRadius: 12, padding: "10px 13px", background: C.paper }}>
+      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: C.ink2, whiteSpace: "nowrap" }}>{label}</div>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: small ? 16 : 29, color: accent, lineHeight: 1.1, marginTop: small ? 3 : 1, overflowWrap: "anywhere" }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: C.ink2, marginTop: 2, fontWeight: 500, overflowWrap: "anywhere", lineHeight: 1.25 }}>{sub}</div>}
     </div>
   );
 }
@@ -672,13 +748,20 @@ function Nav({ tab, setTab }) {
     ["sim", "Test Simulator"],
     ["more", "More"],
   ];
+  const refs = React.useRef({});
+  useEffect(() => {
+    const el = refs.current[tab];
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
+  }, [tab]);
+
   return (
     <nav style={{ background: C.card, borderBottom: `1px solid ${C.line}`, position: "sticky", top: 0, zIndex: 10 }}>
-      <div style={{ maxWidth: 1080, margin: "0 auto", padding: "0 20px", display: "flex", gap: 4, overflowX: "auto" }}>
+      <div className="sg-container sg-nav-scroll" style={{ display: "flex", gap: 4, whiteSpace: "nowrap" }}>
         {tabs.map(([id, label]) => (
           <button
             key={id}
-            className="sg-tab"
+            ref={(el) => { refs.current[id] = el; }}
+            className="sg-tab sg-focus"
             onClick={() => setTab(id)}
             style={{
               border: "none",
@@ -687,6 +770,7 @@ function Nav({ tab, setTab }) {
               fontSize: 14,
               fontWeight: 600,
               whiteSpace: "nowrap",
+              flex: "0 0 auto",
               color: tab === id ? C.ink : C.ink2,
               borderBottom: tab === id ? `2px solid ${C.accent}` : "2px solid transparent",
             }}
@@ -703,7 +787,7 @@ function SectionTitle({ kicker, title, sub }) {
   return (
     <div style={{ margin: "34px 0 18px" }}>
       {kicker && <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 1.4, color: C.accent, fontWeight: 700 }}>{kicker}</div>}
-      <h2 style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 26, margin: "4px 0 0", letterSpacing: -0.4 }}>{title}</h2>
+      <h2 className="sg-h2" style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, margin: "4px 0 0", letterSpacing: -0.4, overflowWrap: "anywhere" }}>{title}</h2>
       {sub && <p style={{ color: C.ink2, fontSize: 14, marginTop: 6, maxWidth: 640 }}>{sub}</p>}
     </div>
   );
@@ -742,7 +826,7 @@ function Hub() {
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+      <div className="sg-grid">
         {list.map((p) => (
           <ProviderCard key={p.id} p={p} />
         ))}
@@ -894,7 +978,7 @@ function Tracker({ attempts, setAttempts }) {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px,1fr))", gap: 12 }}>
+        <div className="sg-fields">
           <Field label="Date"><input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} style={inp} /></Field>
           <Field label="Source">
             <select value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })} style={inp}>
@@ -911,7 +995,7 @@ function Tracker({ attempts, setAttempts }) {
         </div>
         <Field label="Notes"><input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} style={inp} placeholder="What went well / what to fix" /></Field>
 
-        <div style={{ display: "flex", gap: 10 }}>
+        <div className="sg-btn-row" style={{ display: "flex", gap: 10 }}>
           <button onClick={save} style={{ ...btnPrimary, opacity: valid ? 1 : 0.5 }}>{editingId ? "Save changes" : `Add ${form.testType === "SAT" ? "SAT" : "practice"} result`}</button>
           {editingId && <button onClick={cancelEdit} style={btnGhostSolid}>Cancel</button>}
         </div>
@@ -996,7 +1080,7 @@ function Mistakes({ mistakes, setMistakes, attempts }) {
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px,1fr))", gap: 12 }}>
+        <div className="sg-fields">
           <Field label="Date"><input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} style={inp} /></Field>
           <Field label="Section">
             <select value={form.section} onChange={(e) => setForm({ ...form, section: e.target.value, skill: SKILLS[e.target.value][0] })} style={inp}>
@@ -1088,25 +1172,26 @@ function Analytics({ attempts, mistakes, goal }) {
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, marginBottom: 16 }}>
         <div style={{ fontWeight: 700, marginBottom: 14 }}>Score trend</div>
         {attempts.length === 0 ? <Empty text="Log tests to see your trend." /> : (
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 14, height: 180, borderBottom: `1px solid ${C.line}`, paddingBottom: 4 }}>
-            {attempts.map((a) => {
-              const total = a.rw + a.math;
-              const h = (total / maxTotal) * 160;
-              return (
-                <div key={a.id} style={{ flex: 1, textAlign: "center", minWidth: 44 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>{total}</div>
-                  <div style={{ position: "relative", height: h, background: `linear-gradient(${C.accent}, ${C.official})`, borderRadius: "6px 6px 0 0" }} />
-                  <div style={{ fontSize: 10, color: C.ink2, marginTop: 4 }}>{a.date?.slice(5)}</div>
-                </div>
-              );
-            })}
-            <div style={{ borderTop: `2px dashed ${C.accent2}`, position: "relative", flexBasis: "100%", alignSelf: "flex-start", marginTop: (1 - goal.satTarget / maxTotal) * 160, order: 99, width: 0 }} />
+          <div className="sg-nav-scroll" style={{ width: "100%", maxWidth: "100%" }}>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 14, height: 180, borderBottom: `1px solid ${C.line}`, paddingBottom: 4, minWidth: "min-content" }}>
+              {attempts.map((a) => {
+                const total = a.rw + a.math;
+                const h = (total / maxTotal) * 160;
+                return (
+                  <div key={a.id} style={{ flex: "1 0 44px", textAlign: "center", minWidth: 44 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>{total}</div>
+                    <div style={{ position: "relative", height: h, background: `linear-gradient(${C.accent}, ${C.official})`, borderRadius: "6px 6px 0 0" }} />
+                    <div style={{ fontSize: 10, color: C.ink2, marginTop: 4 }}>{a.date?.slice(5)}</div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
         <div style={{ fontSize: 12, color: C.ink2, marginTop: 8 }}>Target (SAT): {goal.satTarget} · latest gap tracked in the header.</div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px,1fr))", gap: 16 }}>
+      <div className="sg-grid">
         <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20 }}>
           <div style={{ fontWeight: 700, marginBottom: 14 }}>Weakest skills (by misses)</div>
           {skillCounts.length === 0 ? <Empty text="No mistakes logged yet." /> : skillCounts.map(([skill, n]) => (
@@ -1311,7 +1396,7 @@ function PlanPanel({ kind, latest, supportingLatest, target, onTarget, nextDate,
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, marginBottom: 24 }}>
       {/* current score (read-only, from tracker) */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px,1fr))", gap: 14, marginBottom: 8 }}>
+      <div className="sg-fields" style={{ marginBottom: 8 }}>
         <div>
           <div style={{ fontSize: 12, color: C.ink2, fontWeight: 600, marginBottom: 5 }}>{isSAT ? "Current SAT Score" : "Current Practice Score"}</div>
           {latestScore != null ? (
@@ -1348,7 +1433,7 @@ function PlanPanel({ kind, latest, supportingLatest, target, onTarget, nextDate,
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+      <div className="sg-btn-row" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <button onClick={() => generate(true)} style={btnPrimary} disabled={loading}>
           {loading ? "Thinking…" : `Generate AI Plan for ${isSAT ? "SAT" : "Practice"}`}
         </button>
@@ -1498,12 +1583,12 @@ function Simulator() {
       ) : (
         <div style={{ background: C.ink, color: "#fff", borderRadius: 16, padding: 30, textAlign: "center" }}>
           <div style={{ fontSize: 13, letterSpacing: 1, textTransform: "uppercase", color: "#9DB0C4" }}>{cur.name}</div>
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 64, margin: "10px 0", color: remaining < 60 ? C.accent2 : "#fff" }}>{fmt(remaining)}</div>
+          <div className="sg-sim-timer" style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 64, margin: "10px 0", color: remaining < 60 ? C.accent2 : "#fff" }}>{fmt(remaining)}</div>
           {cur.adaptive !== "break" && <div style={{ color: "#9DB0C4", fontSize: 14 }}>{cur.q} questions · difficulty: {cur.adaptive === "adaptive" ? "adapts to your Module 1" : "medium"}</div>}
           {cur.adaptive === "break" && <div style={{ color: "#9DB0C4", fontSize: 14 }}>Stretch, breathe, hydrate.</div>}
-          <div style={{ marginTop: 24, display: "flex", gap: 10, justifyContent: "center" }}>
+          <div className="sg-btn-row" style={{ marginTop: 24, display: "flex", gap: 10, justifyContent: "center" }}>
             <button onClick={next} style={{ ...btnPrimary, background: C.accent2 }}>{modIdx < mods.length - 1 ? "Next module →" : "Finish"}</button>
-            <button onClick={() => { setRunning(false); setSeconds(0); setModIdx(0); }} style={{ ...btnGhost, color: "#9DB0C4", border: "1px solid #33455F" }}>Exit</button>
+            <button onClick={() => { setRunning(false); setSeconds(0); setModIdx(0); }} style={{ ...btnGhost, color: "#9DB0C4", border: "1px solid #33455F", borderRadius: 10, padding: "11px 20px" }}>Exit</button>
           </div>
           <div style={{ marginTop: 18, fontSize: 12, color: "#7E93AB" }}>Slot your own reviewed questions into each module. Never paste College Board / vendor questions here.</div>
         </div>
@@ -1597,7 +1682,7 @@ function ProfilePanel({ profile, setProfile, user, displayName }) {
     <>
       <PanelHeading title="Profile" sub="Your details personalize the app. The preferred name appears in the top-right account area." />
       <PanelCard>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 14 }}>
+        <div className="sg-fields">
           <Field label="Preferred name"><input value={profile.name} onChange={(e) => set("name", e.target.value)} style={inp} placeholder="e.g. Ansh" /></Field>
           <Field label="Full name"><input value={profile.fullName} onChange={(e) => set("fullName", e.target.value)} style={inp} placeholder="e.g. Ansh Saini" /></Field>
           <Field label="Email (from your sign-in)"><input value={user?.email || ""} readOnly style={{ ...inp, background: C.soft, color: C.ink2 }} /></Field>
@@ -1619,7 +1704,7 @@ function SettingsPanel({ goal, setGoal, syncState }) {
       <PanelHeading title="Settings" sub="Planning preferences and saved goals. These also appear in the AI Planner." />
       <PanelCard>
         <div style={{ fontWeight: 700, marginBottom: 10 }}>Planning preferences</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px,1fr))", gap: 14 }}>
+        <div className="sg-fields">
           <Field label="SAT Target"><input type="number" value={goal.satTarget} onChange={(e) => set("satTarget", +e.target.value)} style={inp} /></Field>
           <Field label="Next SAT date"><input type="date" value={goal.nextSatDate} onChange={(e) => set("nextSatDate", e.target.value)} style={inp} /></Field>
           <Field label="Practice Target"><input type="number" value={goal.practiceTarget} onChange={(e) => set("practiceTarget", +e.target.value)} style={inp} /></Field>
@@ -1713,7 +1798,7 @@ function DataPrivacyPanel({ profile, goal, attempts, mistakes, plans, setGoal, s
         </p>
       </PanelCard>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px,1fr))", gap: 14 }}>
+      <div className="sg-grid">
         <PanelCard style={{ marginBottom: 0 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Export</div>
           <p style={{ fontSize: 13, color: C.ink2, margin: "0 0 12px" }}>Download all your data as a portable file.</p>
@@ -1873,7 +1958,7 @@ function Empty({ text }) {
   return <div style={{ padding: 24, textAlign: "center", color: C.ink2, fontSize: 14, background: C.soft, borderRadius: 12 }}>{text}</div>;
 }
 
-const inp = { width: "100%", padding: "9px 11px", border: `1px solid ${C.line}`, borderRadius: 9, fontSize: 14, background: "#fff", color: C.ink, outline: "none" };
-const btnPrimary = { marginTop: 14, background: C.accent, color: "#fff", border: "none", padding: "11px 20px", borderRadius: 10, fontSize: 14, fontWeight: 700 };
-const btnGhost = { background: "none", border: "none", color: C.ink2, fontSize: 13, fontWeight: 600, padding: "6px 8px" };
-const btnGhostSolid = { marginTop: 14, background: "#fff", color: C.ink, border: `1px solid ${C.line}`, padding: "11px 20px", borderRadius: 10, fontSize: 14, fontWeight: 700 };
+const inp = { width: "100%", padding: "11px 12px", minHeight: 44, border: `1px solid ${C.line}`, borderRadius: 9, fontSize: 14, background: "#fff", color: C.ink, outline: "none" };
+const btnPrimary = { marginTop: 14, minHeight: 44, background: C.accent, color: "#fff", border: "none", padding: "11px 20px", borderRadius: 10, fontSize: 14, fontWeight: 700 };
+const btnGhost = { background: "none", border: "none", color: C.ink2, fontSize: 13, fontWeight: 600, padding: "8px 10px" };
+const btnGhostSolid = { marginTop: 14, minHeight: 44, background: "#fff", color: C.ink, border: `1px solid ${C.line}`, padding: "11px 20px", borderRadius: 10, fontSize: 14, fontWeight: 700 };
