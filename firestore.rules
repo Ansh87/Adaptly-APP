@@ -10,7 +10,10 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      // A signed-in user may read, create, update, and delete ONLY their own document.
+      // 'write' already covers create/update/delete; listed explicitly for clarity so
+      // account deletion (which deletes users/{uid}) is obviously permitted.
+      allow read, create, update, delete: if request.auth != null && request.auth.uid == userId;
     }
   }
 }

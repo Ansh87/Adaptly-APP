@@ -12,17 +12,22 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  reauthenticateWithPopup,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
   sendPasswordResetEmail,
+  deleteUser,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
 } from "firebase/auth";
 import {
   getFirestore,
   doc,
   getDoc,
   setDoc,
+  deleteDoc,
 } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -61,4 +66,34 @@ export async function loadUserData(uid) {
 export async function saveUserData(uid, data) {
   const ref = doc(db, "users", uid);
   await setDoc(ref, data, { merge: true });
+}
+
+// --- Account deletion ---
+// Removes the user's Firestore document, then deletes their Firebase auth account.
+// Firebase requires a RECENT login to delete an account; if it's been too long it
+// throws "auth/requires-recent-login". The caller catches that and re-authenticates.
+export async function deleteUserDataDoc(uid) {
+  await deleteDoc(doc(db, "users", uid));
+}
+
+export async function deleteAccount() {
+  const user = auth.currentUser;
+  if (!user) throw new Error("No signed-in user.");
+  // Delete Firestore data first so nothing is orphaned if auth deletion succeeds.
+  await deleteUserDataDoc(user.uid);
+  await deleteUser(user);
+}
+
+// Re-authenticate before a sensitive action (used when delete needs a fresh login).
+export async function reauthenticate(passwordIfEmail) {
+  const user = auth.currentUser;
+  if (!user) throw new Error("No signed-in user.");
+  const isGoogle = user.providerData.some((p) => p.providerId === "google.com");
+  if (isGoogle) {
+    await reauthenticateWithPopup(user, googleProvider);
+  } else {
+    if (!passwordIfEmail) throw new Error("Password required to confirm.");
+    const cred = EmailAuthProvider.credential(user.email, passwordIfEmail);
+    await reauthenticateWithCredential(user, cred);
+  }
 }

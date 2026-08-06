@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import Login from "./Login.jsx";
-import { watchAuth, logout, loadUserData, saveUserData } from "./firebase";
+import { watchAuth, logout, loadUserData, saveUserData, deleteAccount, reauthenticate } from "./firebase";
 
 /**
  * SATGene — Digital SAT Practice, Analytics & Study Planner
@@ -181,7 +181,7 @@ const FONT_BODY = '"Inter", system-ui, -apple-system, sans-serif';
 // ---------- Default seed data for brand-new accounts ----------
 // Once a user signs in, their real data loads from Firestore. These defaults only
 // show for a fresh account with no saved document yet.
-const DEFAULT_PROFILE = { name: "" };
+const DEFAULT_PROFILE = { name: "", fullName: "", gradYear: "", school: "", timezone: "" };
 // Goal now separates official SAT from practice, with independent targets and dates.
 // legacyCurrent preserves the old single "current score" WITHOUT treating it as an
 // official SAT result (its source can't be verified — see spec section 7).
@@ -248,6 +248,34 @@ function headerLatest(attempts) {
 function daysUntil(dateStr) {
   if (!dateStr) return null;
   return Math.ceil((new Date(dateStr) - new Date()) / 86400000);
+}
+
+// ---- Superscore: highest section scores across OFFICIAL SAT records only. ----
+// Requires >= 2 official SAT records. On a tie for a section's best score, use the
+// most recent official test date. Practice tests are never included. Returns null
+// when fewer than 2 official SAT records exist.
+function computeSuperscore(attempts) {
+  const sats = attempts.filter((a) => a.testType === "SAT");
+  if (sats.length < 2) return null;
+
+  const pickBest = (field) => {
+    let best = null;
+    for (const a of sats) {
+      const v = Number(a[field]) || 0;
+      if (
+        best === null ||
+        v > best.value ||
+        (v === best.value && new Date(a.date) > new Date(best.date)) // tie → most recent
+      ) {
+        best = { value: v, date: a.date };
+      }
+    }
+    return best;
+  };
+
+  const rw = pickBest("rw");
+  const math = pickBest("math");
+  return { rw: rw.value, rwDate: rw.date, math: math.value, mathDate: math.date, total: rw.value + math.value };
 }
 
 // ================================================================
@@ -348,6 +376,8 @@ function AppShell({ user }) {
         .sg-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(18,32,58,.10); }
         input, select, textarea { font-family: inherit; }
         a { color: ${C.accent}; }
+        .sg-focus:focus-visible { outline: 2px solid ${C.accent}; outline-offset: 2px; border-radius: 6px; }
+        @media (max-width: 560px){ .sg-name-text { display: none; } }
         @media (prefers-reduced-motion: reduce){ .sg-card, .sg-tab { transition: none; } }
       `}</style>
 
@@ -355,7 +385,7 @@ function AppShell({ user }) {
 
       <Nav tab={tab} setTab={setTab} />
 
-      <main style={{ maxWidth: 1080, margin: "0 auto", padding: "0 20px 80px" }}>
+      <main style={{ maxWidth: 1080, margin: "0 auto", padding: "0 20px 40px" }}>
         {tab === "hub" && <Hub />}
         {tab === "tracker" && <Tracker attempts={attempts} setAttempts={setAttempts} />}
         {tab === "mistakes" && <Mistakes mistakes={mistakes} setMistakes={setMistakes} attempts={attempts} />}
@@ -367,24 +397,19 @@ function AppShell({ user }) {
           />
         )}
         {tab === "sim" && <Simulator />}
-        {tab === "profile" && (
-          <ProfileSettings
-            profile={profile} setProfile={setProfile} goal={goal} setGoal={setGoal}
-            user={user} displayName={displayName}
+        {tab === "more" && (
+          <MorePage
+            user={user} displayName={displayName} syncState={syncState}
+            profile={profile} setProfile={setProfile}
+            goal={goal} setGoal={setGoal}
+            attempts={attempts} mistakes={mistakes} plans={plans}
+            setAttempts={setAttempts} setMistakes={setMistakes} setPlans={setPlans}
           />
         )}
-        {tab === "data" && (
-          <DataManager
-            profile={profile} goal={goal} attempts={attempts} mistakes={mistakes} plans={plans}
-            setGoal={setGoal} setAttempts={setAttempts} setMistakes={setMistakes} setPlans={setPlans}
-          />
-        )}
-        {tab === "help" && <Help />}
       </main>
 
-      <footer style={{ borderTop: `1px solid ${C.line}`, padding: "24px 20px", textAlign: "center", fontSize: 13, color: C.ink2 }}>
-        SATGene is a planning, tracking & analytics layer. It links to official and vendor practice —
-        it does not copy their questions. SAT® is a trademark of the College Board, which is not affiliated with this tool.
+      <footer style={{ borderTop: `1px solid ${C.line}`, padding: "16px 20px", textAlign: "center", fontSize: 12.5, color: C.ink2 }}>
+        © 2026 SATGene
       </footer>
     </div>
   );
@@ -397,6 +422,8 @@ function Header({ goal, attempts, user, syncState, displayName, setTab }) {
     return { latest: r.attempt, source: r.source };
   }, [attempts]);
 
+  const superscore = useMemo(() => computeSuperscore(attempts), [attempts]);
+
   const days = daysUntil(goal.nextSatDate);
   const daysValue = days == null ? "Not scheduled" : days > 0 ? days : days === 0 ? "Today" : "Passed";
   const daysAccent = days != null && days <= 30 && days >= 0 ? C.accent2 : C.accent;
@@ -404,38 +431,32 @@ function Header({ goal, attempts, user, syncState, displayName, setTab }) {
   const latestScore = latest ? totalOf(latest) : null;
   const target = goal.satTarget;
 
+  // Gap: prefer superscore when available, else latest score.
+  const gapBasisScore = superscore ? superscore.total : latestScore;
+  const gapBasisLabel = superscore ? "Based on superscore" : latestScore != null ? "Based on latest score" : null;
   let gapValue, gapAccent;
-  if (latestScore == null) {
-    gapValue = "—";
-    gapAccent = C.ink2;
-  } else if (latestScore >= target) {
-    gapValue = "Target reached";
-    gapAccent = C.accent;
+  if (gapBasisScore == null) {
+    gapValue = "—"; gapAccent = C.ink2;
+  } else if (gapBasisScore >= target) {
+    gapValue = "Target reached"; gapAccent = C.accent;
   } else {
-    gapValue = `${target - latestScore} pts`;
-    gapAccent = C.ink2;
+    gapValue = `${target - gapBasisScore} pts`; gapAccent = C.ink2;
   }
 
-  const syncLabel = { saving: "Saving…", saved: "Saved", error: "Save failed", idle: "" }[syncState] || "";
-  const syncColor = syncState === "error" ? "#B4443A" : C.ink2;
+  const fmtShort = (d) => { try { return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" }); } catch { return d; } };
 
   return (
     <header style={{ borderBottom: `1px solid ${C.line}`, background: C.card }}>
-      {/* account bar */}
-      <div style={{ borderBottom: `1px solid ${C.soft}`, background: C.paper }}>
-        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "8px 20px", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 14 }}>
-          {syncLabel && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: syncColor, fontWeight: 500, fontSize: 12.5 }}>
-              {syncState === "saved" && <CheckDot />}
-              {syncState === "saving" && <Spinner />}
-              {syncLabel}
-            </span>
-          )}
-          <ProfileMenu user={user} displayName={displayName} setTab={setTab} />
+      {/* account bar — light, no pill */}
+      <div style={{ background: C.card }}>
+        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "10px 20px 4px", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12 }}>
+          <SaveStatus syncState={syncState} />
+          <span style={{ width: 1, height: 18, background: C.line }} aria-hidden="true" />
+          <AccountArea user={user} displayName={displayName} setTab={setTab} />
         </div>
       </div>
 
-      <div style={{ maxWidth: 1080, margin: "0 auto", padding: "22px 20px", display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
+      <div style={{ maxWidth: 1080, margin: "0 auto", padding: "12px 20px 22px", display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 16 }}>
         <div>
           <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 30, letterSpacing: -0.5, lineHeight: 1 }}>
             SATGene
@@ -447,11 +468,125 @@ function Header({ goal, attempts, user, syncState, displayName, setTab }) {
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Stat label="Days to SAT Test" value={daysValue} accent={daysAccent} small={days == null} />
           <Stat label="Latest Score" value={latestScore == null ? "No score" : latestScore} sub={source} small={latestScore == null} />
+          <SuperscoreStat superscore={superscore} fmtShort={fmtShort} />
           <Stat label="Target" value={target} />
-          <Stat label="Gap" value={gapValue} accent={gapAccent} small={gapValue === "Target reached"} />
+          <Stat label="Gap" value={gapValue} accent={gapAccent} sub={gapBasisLabel} small={gapValue === "Target reached"} />
         </div>
       </div>
     </header>
+  );
+}
+
+// Superscore header card (wider, two-line detail)
+function SuperscoreStat({ superscore, fmtShort }) {
+  if (!superscore) {
+    return (
+      <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, padding: "8px 14px", minWidth: 120, background: C.paper }}>
+        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: C.ink2 }}>Superscore</div>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 16, color: C.ink2, lineHeight: 1.15, marginTop: 3 }}>Not available</div>
+        <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 2 }}>Requires 2 SAT tests</div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ border: `1px solid ${C.accent}`, borderRadius: 12, padding: "8px 14px", minWidth: 150, background: C.paper }}>
+      <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: C.accent, fontWeight: 700 }}>Superscore</div>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 24, color: C.ink, lineHeight: 1.1 }}>{superscore.total}</div>
+      <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 2 }}>R&W {superscore.rw} · {fmtShort(superscore.rwDate)}</div>
+      <div style={{ fontSize: 10.5, color: C.ink2 }}>Math {superscore.math} · {fmtShort(superscore.mathDate)}</div>
+    </div>
+  );
+}
+
+// Transient save status: shows Saving…, then ✓ Saved which auto-hides after ~2.5s.
+function SaveStatus({ syncState }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (syncState === "saving" || syncState === "error") { setVisible(true); return; }
+    if (syncState === "saved") {
+      setVisible(true);
+      const t = setTimeout(() => setVisible(false), 2500);
+      return () => clearTimeout(t);
+    }
+  }, [syncState]);
+
+  if (!visible) return <span style={{ minWidth: 1 }} aria-hidden="true" />;
+  const isError = syncState === "error";
+  const label = isError ? "Save failed" : syncState === "saving" ? "Saving…" : "Saved";
+  return (
+    <span aria-live="polite" style={{ display: "inline-flex", alignItems: "center", gap: 5, color: isError ? "#B4443A" : C.ink2, fontWeight: 500, fontSize: 12 }}>
+      {syncState === "saved" && <CheckDot />}
+      {syncState === "saving" && <Spinner />}
+      {label}
+    </span>
+  );
+}
+
+// Account area: name (→ Profile) + avatar (→ compact popup). No pill.
+function AccountArea({ user, displayName, setTab }) {
+  const firstName = firstNameFrom(displayName);
+  const initials = initialsFrom(displayName);
+  const photo = user?.photoURL || null;
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+  const firstItemRef = React.useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    // move focus into the popup for keyboard users
+    setTimeout(() => firstItemRef.current?.focus(), 0);
+    return () => { document.removeEventListener("mousedown", onClick); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  return (
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+      <button
+        onClick={() => setTab("more")}
+        className="sg-focus"
+        style={{ background: "none", border: "none", padding: "2px 4px", fontSize: 13.5, fontWeight: 600, color: C.ink, cursor: "pointer" }}
+        title="Open your profile"
+      >
+        <span className="sg-name-text">{firstName}</span>
+      </button>
+
+      <div ref={ref} style={{ position: "relative" }}>
+        <button
+          onClick={() => setOpen((o) => !o)}
+          className="sg-focus"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label="Account menu"
+          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", borderRadius: "50%", lineHeight: 0 }}
+        >
+          <Avatar photo={photo} initials={initials} size={32} />
+        </button>
+
+        {open && (
+          <div role="menu" style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 232, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, boxShadow: "0 10px 34px rgba(18,32,58,.16)", overflow: "hidden", zIndex: 60 }}>
+            <div style={{ padding: "14px 16px" }}>
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</div>
+              <div style={{ fontSize: 12.5, color: C.ink2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</div>
+            </div>
+            <div style={{ height: 1, background: C.soft }} />
+            <div style={{ padding: 6 }}>
+              <button
+                ref={firstItemRef}
+                role="menuitem"
+                onClick={() => { setOpen(false); logout(); }}
+                className="sg-focus"
+                style={{ ...menuItemStyle, color: "#B4443A", fontWeight: 600 }}
+              >
+                <IconSignOut /> <span>Sign out</span>
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -485,76 +620,6 @@ function firstNameFrom(name) {
   return name.trim().split(/\s+/)[0] || "Student";
 }
 
-function ProfileMenu({ user, displayName, setTab }) {
-  const [open, setOpen] = useState(false);
-  const menuRef = React.useRef(null);
-  const photo = user?.photoURL || null;
-  const initials = initialsFrom(displayName);
-  const firstName = firstNameFrom(displayName);
-
-  // Close on outside click or Escape.
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false); };
-    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", onClick);
-    document.addEventListener("keydown", onKey);
-    return () => { document.removeEventListener("mousedown", onClick); document.removeEventListener("keydown", onKey); };
-  }, [open]);
-
-  const go = (t) => { setOpen(false); if (t) setTab(t); };
-
-  const items = [
-    { label: "Profile", tab: "profile", icon: IconUser },
-    { label: "Settings", tab: "profile", icon: IconGear },
-    { label: "Import / Export Data", tab: "data", icon: IconData },
-    { label: "Help", tab: "help", icon: IconHelp },
-  ];
-
-  return (
-    <div ref={menuRef} style={{ position: "relative" }}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        aria-haspopup="true"
-        aria-expanded={open}
-        style={{ display: "flex", alignItems: "center", gap: 8, background: open ? C.soft : "none", border: "none", borderRadius: 999, padding: "3px 6px 3px 10px", cursor: "pointer" }}
-      >
-        <span style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{firstName}</span>
-        <Avatar photo={photo} initials={initials} />
-      </button>
-
-      {open && (
-        <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 264, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, boxShadow: "0 10px 34px rgba(18,32,58,.16)", overflow: "hidden", zIndex: 50 }}>
-          {/* identity block */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "16px 16px 14px" }}>
-            <Avatar photo={photo} initials={initials} size={40} />
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 14.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</div>
-              <div style={{ fontSize: 12.5, color: C.ink2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</div>
-            </div>
-          </div>
-          <div style={{ height: 1, background: C.soft }} />
-
-          {/* menu items */}
-          <div style={{ padding: 6 }}>
-            {items.map((it) => (
-              <button key={it.label} onClick={() => go(it.tab)} style={menuItemStyle}>
-                <it.icon /> <span>{it.label}</span>
-              </button>
-            ))}
-          </div>
-          <div style={{ height: 1, background: C.soft }} />
-          <div style={{ padding: 6 }}>
-            <button onClick={() => { setOpen(false); logout(); }} style={{ ...menuItemStyle, color: "#B4443A" }}>
-              <IconSignOut /> <span>Sign out</span>
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function Avatar({ photo, initials, size = 32 }) {
   if (photo) {
     return <img src={photo} alt="" style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", display: "block" }} />;
@@ -584,10 +649,6 @@ const menuItemStyle = {
 
 // Minimal line icons (stroke = currentColor so they inherit item color)
 const iconWrap = { width: 17, height: 17, flexShrink: 0 };
-function IconUser() { return (<svg style={iconWrap} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>); }
-function IconGear() { return (<svg style={iconWrap} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1L14.5 2h-5l-.3 2.9a7 7 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 1.7 1l.3 2.9h5l.3-2.9a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6a7 7 0 0 0 .1-1Z"/></svg>); }
-function IconData() { return (<svg style={iconWrap} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>); }
-function IconHelp() { return (<svg style={iconWrap} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4.5 1.5c0 1.5-2 2-2 3"/><path d="M12 17h.01"/></svg>); }
 function IconSignOut() { return (<svg style={iconWrap} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/></svg>); }
 
 function Stat({ label, value, accent = C.ink, sub, small = false }) {
@@ -609,6 +670,7 @@ function Nav({ tab, setTab }) {
     ["analytics", "Analytics"],
     ["planner", "AI Planner"],
     ["sim", "Test Simulator"],
+    ["more", "More"],
   ];
   return (
     <nav style={{ background: C.card, borderBottom: `1px solid ${C.line}`, position: "sticky", top: 0, zIndex: 10 }}>
@@ -1449,92 +1511,144 @@ function Simulator() {
   );
 }
 
-// ---------- Manage data (backup / restore / reset) ----------
-// ---------- Profile & Settings ----------
-function ProfileSettings({ profile, setProfile, goal, setGoal, user, displayName }) {
+// ============================================================
+// MORE PAGE — profile, settings, data & privacy, help, about
+// ============================================================
+function MorePage({ user, displayName, syncState, profile, setProfile, goal, setGoal, attempts, mistakes, plans, setAttempts, setMistakes, setPlans }) {
+  const [section, setSection] = useState("profile");
   const initials = initialsFrom(displayName);
   const photo = user?.photoURL || null;
 
+  const sections = [
+    ["profile", "Profile"],
+    ["settings", "Settings"],
+    ["data", "Data & Privacy"],
+    ["help", "Help & User Guide"],
+    ["about", "About SATGene"],
+  ];
+
+  const saveText = syncState === "saving" ? "Saving…" : syncState === "error" ? "Save failed" : "Saved to your account";
+
   return (
     <>
-      <SectionTitle kicker="Your account" title="Profile & Settings" sub="Set your name and study goal. Your name shows in the top-right menu and personalizes the app." />
+      <SectionTitle kicker="Account & information" title="More" sub="Manage your profile, preferences, saved data, and SATGene information." />
 
-      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, marginBottom: 16, display: "flex", alignItems: "center", gap: 16 }}>
+      {/* account summary card */}
+      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, marginBottom: 18, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
         <Avatar photo={photo} initials={initials} size={56} />
-        <div>
+        <div style={{ flex: 1, minWidth: 200 }}>
           <div style={{ fontSize: 18, fontWeight: 700 }}>{displayName}</div>
+          {profile.fullName && profile.fullName !== displayName && (
+            <div style={{ fontSize: 13, color: C.ink2 }}>{profile.fullName}</div>
+          )}
           <div style={{ fontSize: 13, color: C.ink2 }}>{user?.email}</div>
         </div>
+        <div style={{ fontSize: 12, color: syncState === "error" ? "#B4443A" : C.ink2 }}>{saveText}</div>
       </div>
 
-      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 6 }}>Your name</div>
-        <p style={{ fontSize: 13, color: C.ink2, margin: "0 0 10px" }}>
-          {user?.displayName
-            ? "Signed in with Google. You can override the name shown in the app here."
-            : "Enter your name so the app can greet you instead of showing “Student.”"}
-        </p>
-        <input
-          value={profile.name}
-          onChange={(e) => setProfile({ ...profile, name: e.target.value })}
-          style={{ ...inp, maxWidth: 360 }}
-          placeholder="e.g. Ansh Sharma"
-        />
-      </div>
+      {/* section nav (left) + content (right) on desktop; stacks on mobile */}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 220px) 1fr", gap: 18, alignItems: "start" }} className="sg-more-grid">
+        <style>{`@media (max-width: 720px){ .sg-more-grid { grid-template-columns: 1fr !important; } }`}</style>
 
-      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20 }}>
-        <div style={{ fontWeight: 700, marginBottom: 4 }}>Goals & test dates</div>
-        <p style={{ fontSize: 12.5, color: C.ink2, margin: "0 0 12px" }}>These are also editable in the AI Planner. Changes save automatically.</p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", gap: 12 }}>
-          <Field label="SAT Target"><input type="number" value={goal.satTarget} onChange={(e) => setGoal({ ...goal, satTarget: +e.target.value })} style={inp} /></Field>
-          <Field label="Next SAT date"><input type="date" value={goal.nextSatDate} onChange={(e) => setGoal({ ...goal, nextSatDate: e.target.value })} style={inp} /></Field>
-          <Field label="Practice Target"><input type="number" value={goal.practiceTarget} onChange={(e) => setGoal({ ...goal, practiceTarget: +e.target.value })} style={inp} /></Field>
-          <Field label="Next practice date"><input type="date" value={goal.nextPracticeDate} onChange={(e) => setGoal({ ...goal, nextPracticeDate: e.target.value })} style={inp} /></Field>
+        <nav style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 8, position: "sticky", top: 64 }}>
+          {sections.map(([id, label]) => (
+            <button key={id} onClick={() => setSection(id)} className="sg-focus" style={{
+              width: "100%", textAlign: "left", padding: "10px 12px", borderRadius: 9, border: "none",
+              background: section === id ? C.soft : "transparent",
+              color: section === id ? C.ink : C.ink2, fontSize: 14, fontWeight: section === id ? 700 : 500, marginBottom: 2,
+            }}>{label}</button>
+          ))}
+        </nav>
+
+        <div>
+          {section === "profile" && <ProfilePanel profile={profile} setProfile={setProfile} user={user} displayName={displayName} />}
+          {section === "settings" && <SettingsPanel goal={goal} setGoal={setGoal} syncState={syncState} />}
+          {section === "data" && (
+            <DataPrivacyPanel
+              profile={profile} goal={goal} attempts={attempts} mistakes={mistakes} plans={plans}
+              setGoal={setGoal} setAttempts={setAttempts} setMistakes={setMistakes} setPlans={setPlans}
+            />
+          )}
+          {section === "help" && <HelpPanel />}
+          {section === "about" && <AboutPanel />}
         </div>
       </div>
     </>
   );
 }
 
-// ---------- Help ----------
-function Help() {
-  const faqs = [
-    ["Is my practice data saved?", "Yes. Everything you log is tied to your account and syncs across any device you sign in on. The top-right indicator shows when it's saving."],
-    ["How do I take a real practice test?", "Go to the Practice Hub tab. Start with College Board's Bluebook — it's the actual test-day app and the most realistic practice available. Each card opens the provider directly."],
-    ["Does SATGene score my SAT?", "No. SATGene tracks and analyzes results you enter and gives study guidance. Official scoring comes from Bluebook. The Simulator reproduces the real timing and structure for practice, not an official score."],
-    ["How do I back up my data?", "Open the profile menu (top right) → Import / Export Data. You can download a backup file and restore it later or on another device."],
-    ["The AI planner shows a rule-based plan. Why?", "If the AI service isn't reachable, the planner falls back to a built-in rule engine so you always get a usable plan."],
-  ];
+function PanelCard({ children, style }) {
+  return <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, marginBottom: 14, ...style }}>{children}</div>;
+}
+function PanelHeading({ title, sub }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <h3 style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 21, margin: 0 }}>{title}</h3>
+      {sub && <p style={{ fontSize: 13.5, color: C.ink2, margin: "6px 0 0", lineHeight: 1.55 }}>{sub}</p>}
+    </div>
+  );
+}
+
+// ---- Profile panel ----
+function ProfilePanel({ profile, setProfile, user, displayName }) {
+  const set = (k, v) => setProfile({ ...profile, [k]: v });
   return (
     <>
-      <SectionTitle kicker="Support" title="Help" sub="Quick answers to common questions about SATGene." />
-      <div style={{ display: "grid", gap: 10 }}>
-        {faqs.map(([q, a]) => (
-          <div key={q} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>
-            <div style={{ fontWeight: 700, fontSize: 14.5, marginBottom: 5 }}>{q}</div>
-            <div style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.55 }}>{a}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{ marginTop: 16, fontSize: 13, color: C.ink2 }}>
-        SATGene is a study companion. It links to official and vendor practice and never copies their questions.
-      </div>
+      <PanelHeading title="Profile" sub="Your details personalize the app. The preferred name appears in the top-right account area." />
+      <PanelCard>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px,1fr))", gap: 14 }}>
+          <Field label="Preferred name"><input value={profile.name} onChange={(e) => set("name", e.target.value)} style={inp} placeholder="e.g. Ansh" /></Field>
+          <Field label="Full name"><input value={profile.fullName} onChange={(e) => set("fullName", e.target.value)} style={inp} placeholder="e.g. Ansh Saini" /></Field>
+          <Field label="Email (from your sign-in)"><input value={user?.email || ""} readOnly style={{ ...inp, background: C.soft, color: C.ink2 }} /></Field>
+          <Field label="Graduation year"><input value={profile.gradYear} onChange={(e) => set("gradYear", e.target.value)} style={inp} placeholder="e.g. 2027" /></Field>
+          <Field label="School (optional)"><input value={profile.school} onChange={(e) => set("school", e.target.value)} style={inp} placeholder="e.g. Lincoln High" /></Field>
+          <Field label="Time zone (optional)"><input value={profile.timezone} onChange={(e) => set("timezone", e.target.value)} style={inp} placeholder="e.g. America/New_York" /></Field>
+        </div>
+        <p style={{ fontSize: 12.5, color: C.ink2, marginTop: 12 }}>Changes save automatically to your account.</p>
+      </PanelCard>
     </>
   );
 }
 
-// ---------- Manage data (backup / restore / reset) ----------
-function DataManager({ profile, goal, attempts, mistakes, plans, setGoal, setAttempts, setMistakes, setPlans }) {
+// ---- Settings panel ----
+function SettingsPanel({ goal, setGoal, syncState }) {
+  const set = (k, v) => setGoal({ ...goal, [k]: v });
+  return (
+    <>
+      <PanelHeading title="Settings" sub="Planning preferences and saved goals. These also appear in the AI Planner." />
+      <PanelCard>
+        <div style={{ fontWeight: 700, marginBottom: 10 }}>Planning preferences</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px,1fr))", gap: 14 }}>
+          <Field label="SAT Target"><input type="number" value={goal.satTarget} onChange={(e) => set("satTarget", +e.target.value)} style={inp} /></Field>
+          <Field label="Next SAT date"><input type="date" value={goal.nextSatDate} onChange={(e) => set("nextSatDate", e.target.value)} style={inp} /></Field>
+          <Field label="Practice Target"><input type="number" value={goal.practiceTarget} onChange={(e) => set("practiceTarget", +e.target.value)} style={inp} /></Field>
+          <Field label="Next practice date"><input type="date" value={goal.nextPracticeDate} onChange={(e) => set("nextPracticeDate", e.target.value)} style={inp} /></Field>
+        </div>
+      </PanelCard>
+      <PanelCard>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>Data-saving status</div>
+        <div style={{ fontSize: 13.5, color: C.ink2 }}>
+          {syncState === "saving" ? "Saving your latest changes…" : syncState === "error" ? "Last save failed — check your connection." : "Your data is saved to your account and syncs across devices."}
+        </div>
+      </PanelCard>
+    </>
+  );
+}
+
+// ---- Data & Privacy panel ----
+function DataPrivacyPanel({ profile, goal, attempts, mistakes, plans, setGoal, setAttempts, setMistakes, setPlans }) {
   const [msg, setMsg] = useState(null);
+  const [confirmText, setConfirmText] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [needsReauth, setNeedsReauth] = useState(false);
+  const [reauthPw, setReauthPw] = useState("");
 
   const exportData = () => {
     const payload = { version: 2, exportedAt: new Date().toISOString(), profile, goal, attempts, mistakes, plans };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = `satgene-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
+    a.href = url; a.download = `satgene-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click();
     URL.revokeObjectURL(url);
     setMsg({ kind: "ok", text: "Backup downloaded." });
   };
@@ -1559,53 +1673,86 @@ function DataManager({ profile, goal, attempts, mistakes, plans, setGoal, setAtt
     e.target.value = "";
   };
 
-  const resetAll = () => {
-    if (!window.confirm("Erase all saved tests, mistakes, plans, and goals from your account? This can't be undone.")) return;
-    setGoal(DEFAULT_GOAL);
-    setAttempts([]);
-    setMistakes([]);
-    setPlans([]);
-    setMsg({ kind: "ok", text: "All data cleared from your account." });
+  const clearAll = () => {
+    if (!window.confirm("Erase all tests, mistakes, plans, and goals from your account? This can't be undone.")) return;
+    setGoal(DEFAULT_GOAL); setAttempts([]); setMistakes([]); setPlans([]);
+    setMsg({ kind: "ok", text: "All records cleared from your account." });
+  };
+
+  const doDelete = async () => {
+    setMsg(null);
+    setDeleting(true);
+    try {
+      if (needsReauth) { await reauthenticate(reauthPw); }
+      await deleteAccount();
+      // On success, auth state change returns the user to the login page automatically.
+    } catch (e) {
+      if (e.code === "auth/requires-recent-login") {
+        setNeedsReauth(true);
+        setMsg({ kind: "err", text: "For security, please confirm your sign-in to delete your account." });
+      } else if (e.code === "auth/wrong-password" || e.code === "auth/invalid-credential") {
+        setMsg({ kind: "err", text: "Incorrect password. Please try again." });
+      } else {
+        setMsg({ kind: "err", text: `Couldn't delete account: ${e.message}` });
+      }
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
     <>
-      <SectionTitle
-        kicker="Your saved work"
-        title="Import / Export Data"
-        sub="Your data is saved to your account and syncs across devices when you sign in. Export a file for an extra backup or to move data manually."
-      />
+      <PanelHeading title="Data & Privacy" sub="Export or import your data, clear records, or delete your account." />
 
-      <div style={{ background: C.soft, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 18, fontSize: 14, color: C.ink2, lineHeight: 1.6 }}>
-        <b style={{ color: C.ink }}>How saving works:</b> everything you log is stored under <b>your account</b> and
-        is available on any device where you sign in. Exporting gives you a portable copy you can re-import later.
-      </div>
+      <PanelCard>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>What we store</div>
+        <p style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.55, margin: 0 }}>
+          SATGene stores your profile, SAT and practice scores, mistake log, targets, test dates, and generated
+          plans under your account. Data is isolated to your sign-in and syncs across your devices.
+        </p>
+      </PanelCard>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px,1fr))", gap: 14 }}>
-        <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Back up</div>
-          <p style={{ fontSize: 13, color: C.ink2, margin: "0 0 12px" }}>Download all your tests, mistakes, and goal as one file.</p>
-          <button onClick={exportData} style={btnPrimary}>Download backup</button>
-        </div>
-
-        <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>Restore</div>
-          <p style={{ fontSize: 13, color: C.ink2, margin: "0 0 12px" }}>Load a backup file. This replaces what's currently saved.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px,1fr))", gap: 14 }}>
+        <PanelCard style={{ marginBottom: 0 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Export</div>
+          <p style={{ fontSize: 13, color: C.ink2, margin: "0 0 12px" }}>Download all your data as a portable file.</p>
+          <button onClick={exportData} style={btnPrimary}>Export account data</button>
+        </PanelCard>
+        <PanelCard style={{ marginBottom: 0 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Import</div>
+          <p style={{ fontSize: 13, color: C.ink2, margin: "0 0 12px" }}>Load a SATGene backup file (replaces current data).</p>
           <label style={{ ...btnGhostSolid, display: "inline-block", marginTop: 0 }}>
-            Choose backup file
+            Import data
             <input type="file" accept="application/json,.json" onChange={importData} style={{ display: "none" }} />
           </label>
-        </div>
-
-        <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
-          <div style={{ fontWeight: 700, marginBottom: 6, color: "#B4443A" }}>Reset</div>
-          <p style={{ fontSize: 13, color: C.ink2, margin: "0 0 12px" }}>Erase everything saved in this browser and start fresh.</p>
-          <button onClick={resetAll} style={{ ...btnGhostSolid, color: "#B4443A", borderColor: "#E3B7B3" }}>Clear all data</button>
-        </div>
+        </PanelCard>
       </div>
 
-      <div style={{ marginTop: 16, fontSize: 13, color: C.ink2 }}>
-        Currently saved: <b>{attempts.length}</b> test{attempts.length === 1 ? "" : "s"} · <b>{mistakes.length}</b> logged mistake{mistakes.length === 1 ? "" : "s"}.
+      <PanelCard style={{ marginTop: 14 }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>Clear records</div>
+        <p style={{ fontSize: 13, color: C.ink2, margin: "0 0 12px" }}>Erase all tests, mistakes, plans, and goals but keep your account.</p>
+        <button onClick={clearAll} style={{ ...btnGhostSolid, color: "#B4443A", borderColor: "#E3B7B3" }}>Clear all records</button>
+      </PanelCard>
+
+      {/* Danger zone: delete account */}
+      <div style={{ background: "#FCF4F3", border: "1px solid #E3B7B3", borderRadius: 14, padding: 20, marginTop: 8 }}>
+        <div style={{ fontWeight: 700, marginBottom: 6, color: "#B4443A" }}>Delete account</div>
+        <p style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.55, margin: "0 0 12px" }}>
+          Permanently deletes your account and all stored data. This cannot be undone. Type <b>DELETE</b> to confirm.
+        </p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="Type DELETE" style={{ ...inp, maxWidth: 180 }} />
+          {needsReauth && (
+            <input type="password" value={reauthPw} onChange={(e) => setReauthPw(e.target.value)} placeholder="Confirm password" style={{ ...inp, maxWidth: 200 }} />
+          )}
+          <button
+            onClick={doDelete}
+            disabled={confirmText !== "DELETE" || deleting}
+            style={{ background: "#B4443A", color: "#fff", border: "none", padding: "11px 20px", borderRadius: 10, fontSize: 14, fontWeight: 700, opacity: confirmText === "DELETE" && !deleting ? 1 : 0.5 }}
+          >
+            {deleting ? "Deleting…" : "Delete my account"}
+          </button>
+        </div>
       </div>
 
       {msg && (
@@ -1613,9 +1760,101 @@ function DataManager({ profile, goal, attempts, mistakes, plans, setGoal, setAtt
           {msg.text}
         </div>
       )}
+
+      <div style={{ marginTop: 16 }}>
+        <button onClick={logout} style={{ ...btnGhostSolid, color: C.ink2 }}>Sign out</button>
+      </div>
     </>
   );
 }
+
+// ---- Help & User Guide panel ----
+function HelpPanel() {
+  const guide = [
+    ["Practice Hub", "Organize your practice activities and open official and vendor study resources. SATGene links out to providers and does not reproduce copyrighted official SAT questions."],
+    ["Test Tracker", "Log both practice and official SAT results. Test Type distinguishes Practice from SAT. Reading & Writing plus Math makes the total. Official SAT records can contribute to your superscore; practice-test scores never do."],
+    ["Mistake Log", "Record each miss with its Test Type, section, topic, error type, notes, corrective action, and status. Saved mistakes can be used by the AI Planner to target weak areas."],
+    ["Analytics", "See score trends, Reading & Writing and Math trends, practice-versus-official performance, progress toward your target, and how your superscore is formed."],
+    ["AI Planner", "Separate SAT and Practice plans. Generate AI plans from a model, or Instant rule-based plans that always work. Every plan is saved to history. AI-generated content may contain errors."],
+    ["Test Simulator", "Practice the real digital SAT structure and timing. Questions are original or your own — the simulator does not use official College Board questions, and its results are not official SAT scores."],
+  ];
+  return (
+    <>
+      <PanelHeading title="Help & User Guide" sub="What each part of SATGene does, in plain language." />
+      {guide.map(([t, d]) => (
+        <PanelCard key={t}>
+          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 5 }}>{t}</div>
+          <div style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.55 }}>{d}</div>
+        </PanelCard>
+      ))}
+    </>
+  );
+}
+
+// ---- About panel (with disclaimer) ----
+function AboutPanel() {
+  return (
+    <>
+      <PanelHeading title="About SATGene" />
+      <PanelCard>
+        <p style={{ fontSize: 14, color: C.ink, lineHeight: 1.6, margin: 0 }}>
+          SATGene is a digital SAT planning, tracking, analytics, and study-planning prototype. It helps students
+          organize official SAT and practice-test scores, review mistakes, monitor progress, calculate a superscore,
+          and create personalized study plans.
+        </p>
+      </PanelCard>
+
+      <PanelCard>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>Developed by Ansh Saini</div>
+        <p style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.6, margin: 0 }}>
+          SATGene was developed by Ansh Saini, a high school student, as an independent educational prototype. The
+          project explores how responsible data tracking, analytics, and artificial intelligence can help students
+          understand their SAT preparation progress and plan their next steps.
+        </p>
+      </PanelCard>
+
+      <PanelCard>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Features</div>
+        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, color: C.ink2, lineHeight: 1.7 }}>
+          <li><b>Practice Hub</b> — organize practice and open study resources.</li>
+          <li><b>SAT & Practice Test Tracker</b> — log official and practice results separately.</li>
+          <li><b>Mistake Log</b> — record and categorize errors for review.</li>
+          <li><b>Score Analytics</b> — trends across sections and test types.</li>
+          <li><b>SAT Superscore</b> — best section scores across official SATs.</li>
+          <li><b>AI SAT Plan & Practice Plan</b> — model-generated study guidance.</li>
+          <li><b>Instant rule-based planning</b> — works with no AI.</li>
+          <li><b>Test Simulator</b> — real structure and timing practice.</li>
+          <li><b>User-specific saved data</b> — isolated to your account.</li>
+        </ul>
+        <p style={{ fontSize: 13, color: C.ink2, lineHeight: 1.6, marginTop: 12, marginBottom: 0 }}>
+          <b>Score types:</b> an <b>official SAT score</b> comes from a real College Board SAT; a <b>practice-test
+          score</b> comes from practice; a <b>target score</b> is your goal; a <b>superscore</b> is a calculated
+          combination of your best official SAT section scores.
+        </p>
+      </PanelCard>
+
+      {/* Disclaimer */}
+      <div style={{ background: C.soft, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, marginTop: 4 }}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 18, marginBottom: 12 }}>Important Disclaimer</div>
+        {[
+          ["Independent project", "SATGene is an independent educational prototype developed by Ansh Saini, a high school student. It is intended to help students organize test results, review mistakes, view performance trends, and create study plans."],
+          ["No College Board affiliation", "SATGene is not affiliated with, endorsed by, approved by, or sponsored by College Board or any test-preparation company. SAT® is a trademark of College Board. SATGene does not issue official SAT scores, register students for the SAT, submit scores to colleges, reproduce official SAT questions, or provide official College Board services."],
+          ["Superscore calculation", "The SAT superscore shown in SATGene is a mathematical calculation based on official SAT scores entered by the user. Colleges and universities may have different score-use and superscoring policies. Students must verify each institution's current policy directly."],
+          ["AI recommendations", "AI-generated and rule-based recommendations may be incomplete, inaccurate, or unsuitable for a particular student. They should be treated as supplemental planning guidance, not professional educational, admissions, legal, or financial advice."],
+          ["No guaranteed outcomes", "SATGene does not guarantee score improvement, college admission, scholarship eligibility, academic performance, or any other educational outcome."],
+          ["User responsibility", "Students should verify SAT dates, registration requirements, official scores, testing policies, score-reporting requirements, superscoring policies, and college admission requirements through College Board and the relevant institutions. Users should not upload copyrighted test questions, official answer keys, confidential school records, or unnecessary sensitive personal information."],
+          ["Prototype status", "SATGene is a student-developed prototype. Features may change, and the application may contain technical errors, inaccurate outputs, or temporary interruptions."],
+        ].map(([t, d]) => (
+          <div key={t} style={{ marginBottom: 12 }}>
+            <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 3 }}>{t}</div>
+            <div style={{ fontSize: 13, color: C.ink2, lineHeight: 1.55 }}>{d}</div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 
 // ---------- Small UI helpers ----------
 function Field({ label, children }) {
