@@ -4,15 +4,24 @@
   publish = "dist"
   functions = "netlify/functions"
 
+# The Firebase web API key (VITE_FIREBASE_API_KEY, an "AIza..." value) is PUBLIC by
+# design — it ships in the browser bundle on purpose and is not a secret. Security is
+# enforced by Firestore rules and enabled sign-in methods, not by hiding this key.
+# The real secret (GEMINI_API_KEY) lives only in the serverless function, never in the
+# frontend bundle, so it is not exposed. We tell Netlify's scanner to ignore the
+# Firebase key's value everywhere it appears (bundle + node_modules type files).
 [build.environment]
   SECRETS_SCAN_OMIT_PATHS = "dist/**,node_modules/**"
   SECRETS_SCAN_OMIT_KEYS = "VITE_FIREBASE_API_KEY"
 
+# Route the frontend's /api/plan call to the serverless function.
+# This MUST come before the SPA catch-all below, or the catch-all swallows it.
 [[redirects]]
   from = "/api/plan"
   to = "/.netlify/functions/plan"
   status = 200
 
+# Single-page-app fallback so refreshes on any path load index.html
 [[redirects]]
   from = "/*"
   to = "/index.html"

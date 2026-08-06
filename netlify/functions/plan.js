@@ -1,9 +1,9 @@
 // Netlify Function: POST /api/plan
-// Generates an SAT study plan with Google Gemini. The API key stays server-side
-// (set GEMINI_API_KEY in Netlify → Site settings → Environment variables).
+// Generates a SAT or Practice study plan with Google Gemini. The API key stays
+// server-side (set GEMINI_API_KEY in Netlify → Environment variables).
 //
-// Request body:  { goal, attempts, mistakes }
-// Response body: { summary, focus[], today, week[], retake }
+// Request body:  { planKind, goal:{target,nextDate}, latest, supportingLatest, attempts, mistakes }
+// Response body: { summary, focus[], week[], practiceSchedule, nextAction }
 
 export default async (req) => {
   if (req.method !== "POST") {
@@ -22,32 +22,41 @@ export default async (req) => {
     return json({ error: "Invalid JSON body" }, 400);
   }
 
-  const { goal = {}, attempts = [], mistakes = [] } = body;
-  const latest = attempts.length ? attempts[attempts.length - 1] : null;
-  const latestTotal = latest ? latest.rw + latest.math : goal.current;
-  const daysLeft = goal.testDate
-    ? Math.max(1, Math.ceil((new Date(goal.testDate) - new Date()) / 86400000))
+  const { planKind = "SAT", goal = {}, latest = null, supportingLatest = null, mistakes = [] } = body;
+  const isSAT = planKind === "SAT";
+  const latestTotal = latest ? (Number(latest.rw) || 0) + (Number(latest.math) || 0) : null;
+  const supportTotal = supportingLatest ? (Number(supportingLatest.rw) || 0) + (Number(supportingLatest.math) || 0) : null;
+  const daysLeft = goal.nextDate
+    ? Math.max(0, Math.ceil((new Date(goal.nextDate) - new Date()) / 86400000))
     : "unknown";
 
-  const prompt = `You are an expert SAT tutor writing a study plan for one student.
+  const kindLabel = isSAT ? "official SAT" : "next practice test";
+  const scoreLine = latestTotal != null
+    ? `Current ${kindLabel} score: ${latestTotal} (R&W ${latest.rw}, Math ${latest.math}).`
+    : isSAT
+      ? `No official SAT score yet.${supportTotal != null ? ` Latest practice score ${supportTotal} is context only, NOT an official result.` : ""}`
+      : `No practice score recorded yet.`;
 
-Data:
-- Target score: ${goal.target}
-- Most recent total: ${latestTotal}
-- Days until test: ${daysLeft}
-- Logged mistakes (skill and reason): ${JSON.stringify(
-    mistakes.map((m) => ({ skill: m.skill, section: m.section, why: m.why }))
+  const prompt = `You are an expert SAT tutor writing a ${isSAT ? "SAT improvement" : "practice-test preparation"} plan for one student.
+
+${scoreLine}
+Target ${kindLabel} score: ${goal.target}.
+Days until ${kindLabel}: ${daysLeft}.
+Logged mistakes (skill, section, reason, type): ${JSON.stringify(
+    mistakes.map((m) => ({ skill: m.skill, section: m.section, why: m.why, type: m.testType || "Practice" }))
   )}
 
-Write a concise, specific, encouraging plan. Focus on the student's weakest skills
-(the ones appearing most in their mistakes). Respond with ONLY a JSON object, no
-markdown, no code fences, in exactly this shape:
+${isSAT
+  ? "Both SAT and practice mistakes may inform this plan. If there is no official SAT score, say so clearly and treat any practice score as a baseline only."
+  : "Prioritize recent practice-test mistakes. Focus on what to do before the next practice test."}
+
+Respond with ONLY a JSON object, no markdown or code fences, exactly:
 {
-  "summary": "one or two sentences on where they stand",
-  "focus": ["skill 1", "skill 2", "skill 3"],
-  "today": "one concrete action for today",
-  "week": ["task 1", "task 2", "task 3", "task 4"],
-  "retake": "one sentence on whether the test date/goal looks realistic"
+  "summary": "2-3 sentences on where they stand and the gap to target",
+  "focus": ["priority topic 1", "priority topic 2", "priority topic 3"],
+  "week": ["weekly task 1", "task 2", "task 3", "task 4"],
+  "practiceSchedule": "one sentence on ${isSAT ? "full practice tests before the SAT" : "timed drills before the practice test"}",
+  "nextAction": "one concrete recommended next action"
 }`;
 
   const model = "gemini-2.0-flash";
@@ -94,9 +103,9 @@ markdown, no code fences, in exactly this shape:
   const safe = {
     summary: String(plan.summary || "Plan generated."),
     focus: Array.isArray(plan.focus) ? plan.focus.slice(0, 5) : [],
-    today: String(plan.today || ""),
     week: Array.isArray(plan.week) ? plan.week.slice(0, 6) : [],
-    retake: String(plan.retake || ""),
+    practiceSchedule: String(plan.practiceSchedule || ""),
+    nextAction: String(plan.nextAction || ""),
   };
 
   return json(safe, 200);

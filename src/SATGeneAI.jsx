@@ -181,13 +181,74 @@ const FONT_BODY = '"Inter", system-ui, -apple-system, sans-serif';
 // ---------- Default seed data for brand-new accounts ----------
 // Once a user signs in, their real data loads from Firestore. These defaults only
 // show for a fresh account with no saved document yet.
-const DEFAULT_GOAL = { current: 1200, target: 1450, testDate: "2026-10-03" };
-const DEFAULT_ATTEMPTS = [
-  { id: 1, date: "2026-06-14", source: "Bluebook", rw: 620, math: 640, minutes: 130, confidence: 3, notes: "Ran low on time in Math Module 2." },
-];
-const DEFAULT_MISTAKES = [
-  { id: 1, date: "2026-06-14", source: "Bluebook", section: "Math", skill: "Advanced Math", difficulty: "Hard", why: "Careless", concept: "Factoring quadratics before plugging in.", mastered: false },
-];
+const DEFAULT_PROFILE = { name: "" };
+// Goal now separates official SAT from practice, with independent targets and dates.
+// legacyCurrent preserves the old single "current score" WITHOUT treating it as an
+// official SAT result (its source can't be verified — see spec section 7).
+const DEFAULT_GOAL = {
+  satTarget: 1550,
+  practiceTarget: 1500,
+  nextSatDate: "",
+  nextPracticeDate: "",
+  legacyCurrent: null,
+};
+// Attempts now carry a testType: "SAT" (official) or "Practice".
+const DEFAULT_ATTEMPTS = [];
+// Mistakes now carry a testType as well.
+const DEFAULT_MISTAKES = [];
+// Saved study plans (history). Never auto-overwritten.
+const DEFAULT_PLANS = [];
+
+// Migrate an older saved document to the new shape. Pure function, no side effects.
+function migrateUserData(data) {
+  if (!data) return null;
+  const out = { ...data };
+
+  // Goal migration: map old { current, target, testDate } into the new fields
+  // without asserting the old current was an official SAT.
+  const g = data.goal || {};
+  out.goal = {
+    satTarget: g.satTarget ?? g.target ?? DEFAULT_GOAL.satTarget,
+    practiceTarget: g.practiceTarget ?? DEFAULT_GOAL.practiceTarget,
+    nextSatDate: g.nextSatDate ?? "",
+    nextPracticeDate: g.nextPracticeDate ?? g.testDate ?? "",
+    legacyCurrent: g.legacyCurrent ?? g.current ?? null,
+  };
+
+  // Attempts: anything without a testType predates the field and was, by design,
+  // a practice-test tracker — so it becomes "Practice".
+  out.attempts = Array.isArray(data.attempts)
+    ? data.attempts.map((a) => ({ ...a, testType: a.testType || "Practice" }))
+    : [];
+
+  // Mistakes: same default.
+  out.mistakes = Array.isArray(data.mistakes)
+    ? data.mistakes.map((m) => ({ ...m, testType: m.testType || "Practice" }))
+    : [];
+
+  out.plans = Array.isArray(data.plans) ? data.plans : [];
+  return out;
+}
+
+// ---- Score helpers (single source of truth for header + planners) ----
+const totalOf = (a) => (Number(a.rw) || 0) + (Number(a.math) || 0);
+const byDateDesc = (a, b) => new Date(b.date) - new Date(a.date);
+
+function latestOfType(attempts, type) {
+  return attempts.filter((a) => a.testType === type).sort(byDateDesc)[0] || null;
+}
+// Header "Latest Score" priority: most recent official SAT, else most recent practice.
+function headerLatest(attempts) {
+  const sat = latestOfType(attempts, "SAT");
+  if (sat) return { attempt: sat, source: "Official SAT" };
+  const prac = latestOfType(attempts, "Practice");
+  if (prac) return { attempt: prac, source: "Practice Score" };
+  return { attempt: null, source: null };
+}
+function daysUntil(dateStr) {
+  if (!dateStr) return null;
+  return Math.ceil((new Date(dateStr) - new Date()) / 86400000);
+}
 
 // ================================================================
 export default function SATGeneAI() {
@@ -220,23 +281,28 @@ export default function SATGeneAI() {
 
 function AppShell({ user }) {
   const [tab, setTab] = useState("hub");
+  const [profile, setProfile] = useState(DEFAULT_PROFILE);
   const [goal, setGoal] = useState(DEFAULT_GOAL);
   const [attempts, setAttempts] = useState(DEFAULT_ATTEMPTS);
   const [mistakes, setMistakes] = useState(DEFAULT_MISTAKES);
+  const [plans, setPlans] = useState(DEFAULT_PLANS);
   const [dataLoaded, setDataLoaded] = useState(false);
   const [syncState, setSyncState] = useState("idle"); // idle | saving | saved | error
 
-  // Load this user's data from Firestore once on sign-in.
+  // Load this user's data from Firestore once on sign-in, migrating older shapes.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const data = await loadUserData(user.uid);
+        const raw = await loadUserData(user.uid);
         if (cancelled) return;
+        const data = migrateUserData(raw);
         if (data) {
-          if (data.goal) setGoal(data.goal);
+          if (data.profile) setProfile({ ...DEFAULT_PROFILE, ...data.profile });
+          if (data.goal) setGoal({ ...DEFAULT_GOAL, ...data.goal });
           if (Array.isArray(data.attempts)) setAttempts(data.attempts);
           if (Array.isArray(data.mistakes)) setMistakes(data.mistakes);
+          if (Array.isArray(data.plans)) setPlans(data.plans);
         }
         // If no data doc exists yet, the defaults stay and get saved on first change.
       } catch (e) {
@@ -254,7 +320,7 @@ function AppShell({ user }) {
     setSyncState("saving");
     const t = setTimeout(async () => {
       try {
-        await saveUserData(user.uid, { goal, attempts, mistakes });
+        await saveUserData(user.uid, { profile, goal, attempts, mistakes, plans });
         setSyncState("saved");
       } catch (e) {
         console.error("Save failed:", e);
@@ -262,7 +328,13 @@ function AppShell({ user }) {
       }
     }, 600); // debounce so rapid edits don't spam writes
     return () => clearTimeout(t);
-  }, [goal, attempts, mistakes, dataLoaded, user.uid]);
+  }, [profile, goal, attempts, mistakes, plans, dataLoaded, user.uid]);
+
+  // Resolve the display name: student-entered name first, then Google name, else "Student".
+  const displayName =
+    (profile.name && profile.name.trim()) ||
+    (user.displayName && user.displayName.trim()) ||
+    "Student";
 
   return (
     <div style={{ background: C.paper, minHeight: "100vh", fontFamily: FONT_BODY, color: C.ink }}>
@@ -279,23 +351,35 @@ function AppShell({ user }) {
         @media (prefers-reduced-motion: reduce){ .sg-card, .sg-tab { transition: none; } }
       `}</style>
 
-      <Header goal={goal} attempts={attempts} user={user} syncState={syncState} />
+      <Header attempts={attempts} goal={goal} user={user} syncState={syncState} displayName={displayName} setTab={setTab} />
 
       <Nav tab={tab} setTab={setTab} />
 
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: "0 20px 80px" }}>
         {tab === "hub" && <Hub />}
-        {tab === "tracker" && <Tracker attempts={attempts} setAttempts={setAttempts} goal={goal} />}
-        {tab === "mistakes" && <Mistakes mistakes={mistakes} setMistakes={setMistakes} />}
+        {tab === "tracker" && <Tracker attempts={attempts} setAttempts={setAttempts} />}
+        {tab === "mistakes" && <Mistakes mistakes={mistakes} setMistakes={setMistakes} attempts={attempts} />}
         {tab === "analytics" && <Analytics attempts={attempts} mistakes={mistakes} goal={goal} />}
-        {tab === "planner" && <Planner mistakes={mistakes} attempts={attempts} goal={goal} setGoal={setGoal} />}
-        {tab === "sim" && <Simulator />}
-        {tab === "data" && (
-          <DataManager
-            goal={goal} attempts={attempts} mistakes={mistakes}
-            setGoal={setGoal} setAttempts={setAttempts} setMistakes={setMistakes}
+        {tab === "planner" && (
+          <Planner
+            attempts={attempts} mistakes={mistakes} goal={goal} setGoal={setGoal}
+            plans={plans} setPlans={setPlans} setTab={setTab}
           />
         )}
+        {tab === "sim" && <Simulator />}
+        {tab === "profile" && (
+          <ProfileSettings
+            profile={profile} setProfile={setProfile} goal={goal} setGoal={setGoal}
+            user={user} displayName={displayName}
+          />
+        )}
+        {tab === "data" && (
+          <DataManager
+            profile={profile} goal={goal} attempts={attempts} mistakes={mistakes} plans={plans}
+            setGoal={setGoal} setAttempts={setAttempts} setMistakes={setMistakes} setPlans={setPlans}
+          />
+        )}
+        {tab === "help" && <Help />}
       </main>
 
       <footer style={{ borderTop: `1px solid ${C.line}`, padding: "24px 20px", textAlign: "center", fontSize: 13, color: C.ink2 }}>
@@ -307,32 +391,47 @@ function AppShell({ user }) {
 }
 
 // ---------- Header ----------
-function Header({ goal, attempts, user, syncState }) {
-  const daysLeft = useMemo(() => {
-    const d = Math.ceil((new Date(goal.testDate) - new Date()) / 86400000);
-    return d;
-  }, [goal.testDate]);
-  const latest = attempts[attempts.length - 1];
-  const latestTotal = latest ? latest.rw + latest.math : goal.current;
-  const gap = goal.target - latestTotal;
+function Header({ goal, attempts, user, syncState, displayName, setTab }) {
+  const { latest, source } = useMemo(() => {
+    const r = headerLatest(attempts);
+    return { latest: r.attempt, source: r.source };
+  }, [attempts]);
 
-  const syncLabel = { saving: "Saving…", saved: "Saved ✓", error: "Save failed", idle: "" }[syncState] || "";
-  const syncColor = syncState === "error" ? "#B4443A" : C.accent;
+  const days = daysUntil(goal.nextSatDate);
+  const daysValue = days == null ? "Not scheduled" : days > 0 ? days : days === 0 ? "Today" : "Passed";
+  const daysAccent = days != null && days <= 30 && days >= 0 ? C.accent2 : C.accent;
+
+  const latestScore = latest ? totalOf(latest) : null;
+  const target = goal.satTarget;
+
+  let gapValue, gapAccent;
+  if (latestScore == null) {
+    gapValue = "—";
+    gapAccent = C.ink2;
+  } else if (latestScore >= target) {
+    gapValue = "Target reached";
+    gapAccent = C.accent;
+  } else {
+    gapValue = `${target - latestScore} pts`;
+    gapAccent = C.ink2;
+  }
+
+  const syncLabel = { saving: "Saving…", saved: "Saved", error: "Save failed", idle: "" }[syncState] || "";
+  const syncColor = syncState === "error" ? "#B4443A" : C.ink2;
 
   return (
     <header style={{ borderBottom: `1px solid ${C.line}`, background: C.card }}>
       {/* account bar */}
       <div style={{ borderBottom: `1px solid ${C.soft}`, background: C.paper }}>
-        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "8px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, fontSize: 13 }}>
-          <span style={{ color: C.ink2 }}>
-            {user?.displayName ? `${user.displayName} · ` : ""}{user?.email}
-          </span>
-          <span style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            {syncLabel && <span style={{ color: syncColor, fontWeight: 600, fontSize: 12 }}>{syncLabel}</span>}
-            <button onClick={logout} style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 8, padding: "4px 12px", fontSize: 13, fontWeight: 600, color: C.ink2 }}>
-              Sign out
-            </button>
-          </span>
+        <div style={{ maxWidth: 1080, margin: "0 auto", padding: "8px 20px", display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 14 }}>
+          {syncLabel && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: syncColor, fontWeight: 500, fontSize: 12.5 }}>
+              {syncState === "saved" && <CheckDot />}
+              {syncState === "saving" && <Spinner />}
+              {syncLabel}
+            </span>
+          )}
+          <ProfileMenu user={user} displayName={displayName} setTab={setTab} />
         </div>
       </div>
 
@@ -346,21 +445,157 @@ function Header({ goal, attempts, user, syncState }) {
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Stat label="Days to test" value={daysLeft > 0 ? daysLeft : "—"} accent={daysLeft <= 30 ? C.accent2 : C.accent} />
-          <Stat label="Latest total" value={latestTotal} />
-          <Stat label="Target" value={goal.target} />
-          <Stat label="Gap" value={gap > 0 ? `+${gap}` : "Met ✓"} accent={gap > 0 ? C.ink2 : C.accent} />
+          <Stat label="Days to SAT Test" value={daysValue} accent={daysAccent} small={days == null} />
+          <Stat label="Latest Score" value={latestScore == null ? "No score" : latestScore} sub={source} small={latestScore == null} />
+          <Stat label="Target" value={target} />
+          <Stat label="Gap" value={gapValue} accent={gapAccent} small={gapValue === "Target reached"} />
         </div>
       </div>
     </header>
   );
 }
 
-function Stat({ label, value, accent = C.ink }) {
+// Small sync indicators
+function CheckDot() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+      <circle cx="12" cy="12" r="10" fill={C.accent} />
+      <path d="M7 12.5l3 3 7-7" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+function Spinner() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" style={{ animation: "sg-spin 0.7s linear infinite" }}>
+      <style>{`@keyframes sg-spin { to { transform: rotate(360deg); } }`}</style>
+      <circle cx="12" cy="12" r="9" stroke={C.line} strokeWidth="3" fill="none" />
+      <path d="M12 3a9 9 0 0 1 9 9" stroke={C.accent} strokeWidth="3" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// ---------- Profile menu (avatar + dropdown) ----------
+function initialsFrom(name) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "S";
+  if (parts.length === 1) return parts[0][0].toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+function firstNameFrom(name) {
+  return name.trim().split(/\s+/)[0] || "Student";
+}
+
+function ProfileMenu({ user, displayName, setTab }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = React.useRef(null);
+  const photo = user?.photoURL || null;
+  const initials = initialsFrom(displayName);
+  const firstName = firstNameFrom(displayName);
+
+  // Close on outside click or Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onClick);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onClick); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+
+  const go = (t) => { setOpen(false); if (t) setTab(t); };
+
+  const items = [
+    { label: "Profile", tab: "profile", icon: IconUser },
+    { label: "Settings", tab: "profile", icon: IconGear },
+    { label: "Import / Export Data", tab: "data", icon: IconData },
+    { label: "Help", tab: "help", icon: IconHelp },
+  ];
+
+  return (
+    <div ref={menuRef} style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="true"
+        aria-expanded={open}
+        style={{ display: "flex", alignItems: "center", gap: 8, background: open ? C.soft : "none", border: "none", borderRadius: 999, padding: "3px 6px 3px 10px", cursor: "pointer" }}
+      >
+        <span style={{ fontSize: 13.5, fontWeight: 600, color: C.ink }}>{firstName}</span>
+        <Avatar photo={photo} initials={initials} />
+      </button>
+
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 264, background: "#fff", border: `1px solid ${C.line}`, borderRadius: 14, boxShadow: "0 10px 34px rgba(18,32,58,.16)", overflow: "hidden", zIndex: 50 }}>
+          {/* identity block */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "16px 16px 14px" }}>
+            <Avatar photo={photo} initials={initials} size={40} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</div>
+              <div style={{ fontSize: 12.5, color: C.ink2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{user?.email}</div>
+            </div>
+          </div>
+          <div style={{ height: 1, background: C.soft }} />
+
+          {/* menu items */}
+          <div style={{ padding: 6 }}>
+            {items.map((it) => (
+              <button key={it.label} onClick={() => go(it.tab)} style={menuItemStyle}>
+                <it.icon /> <span>{it.label}</span>
+              </button>
+            ))}
+          </div>
+          <div style={{ height: 1, background: C.soft }} />
+          <div style={{ padding: 6 }}>
+            <button onClick={() => { setOpen(false); logout(); }} style={{ ...menuItemStyle, color: "#B4443A" }}>
+              <IconSignOut /> <span>Sign out</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Avatar({ photo, initials, size = 32 }) {
+  if (photo) {
+    return <img src={photo} alt="" style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", display: "block" }} />;
+  }
+  return (
+    <div style={{ width: size, height: size, borderRadius: "50%", background: C.accent, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.42, fontWeight: 700, letterSpacing: 0.2 }}>
+      {initials}
+    </div>
+  );
+}
+
+const menuItemStyle = {
+  width: "100%",
+  display: "flex",
+  alignItems: "center",
+  gap: 11,
+  padding: "9px 10px",
+  background: "none",
+  border: "none",
+  borderRadius: 9,
+  fontSize: 14,
+  fontWeight: 500,
+  color: "#31445F",
+  cursor: "pointer",
+  textAlign: "left",
+};
+
+// Minimal line icons (stroke = currentColor so they inherit item color)
+const iconWrap = { width: 17, height: 17, flexShrink: 0 };
+function IconUser() { return (<svg style={iconWrap} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>); }
+function IconGear() { return (<svg style={iconWrap} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1L14.5 2h-5l-.3 2.9a7 7 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 1.7 1l.3 2.9h5l.3-2.9a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6a7 7 0 0 0 .1-1Z"/></svg>); }
+function IconData() { return (<svg style={iconWrap} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12"/><path d="m8 11 4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>); }
+function IconHelp() { return (<svg style={iconWrap} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 4.5 1.5c0 1.5-2 2-2 3"/><path d="M12 17h.01"/></svg>); }
+function IconSignOut() { return (<svg style={iconWrap} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/></svg>); }
+
+function Stat({ label, value, accent = C.ink, sub, small = false }) {
   return (
     <div style={{ border: `1px solid ${C.line}`, borderRadius: 12, padding: "8px 14px", minWidth: 92, background: C.paper }}>
       <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: C.ink2 }}>{label}</div>
-      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 24, color: accent, lineHeight: 1.1 }}>{value}</div>
+      <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: small ? 16 : 24, color: accent, lineHeight: 1.15, marginTop: small ? 3 : 0 }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: C.ink2, marginTop: 2, fontWeight: 500 }}>{sub}</div>}
     </div>
   );
 }
@@ -374,7 +609,6 @@ function Nav({ tab, setTab }) {
     ["analytics", "Analytics"],
     ["planner", "AI Planner"],
     ["sim", "Test Simulator"],
-    ["data", "Manage data"],
   ];
   return (
     <nav style={{ background: C.card, borderBottom: `1px solid ${C.line}`, position: "sticky", top: 0, zIndex: 10 }}>
@@ -508,53 +742,151 @@ function ProviderCard({ p }) {
 }
 
 // ---------- 2. TEST TRACKER ----------
-function Tracker({ attempts, setAttempts, goal }) {
-  const blank = { date: "", source: "Bluebook", rw: "", math: "", minutes: "", confidence: 3, notes: "" };
-  const [form, setForm] = useState(blank);
+const SAT_SOURCES = ["College Board"];
+const PRACTICE_SOURCES = ["Bluebook", "Khan Academy", "Princeton Review", "Kaplan", "UWorld", "Magoosh", "School", "Paper", "Tutor", "Other"];
 
-  const add = () => {
-    if (!form.date || form.rw === "" || form.math === "") return;
-    setAttempts([...attempts, { ...form, id: Date.now(), rw: +form.rw, math: +form.math, minutes: +form.minutes || 0 }]);
-    setForm(blank);
+function Tracker({ attempts, setAttempts }) {
+  const blankFor = (testType) => ({
+    date: "",
+    testType,
+    source: testType === "SAT" ? SAT_SOURCES[0] : PRACTICE_SOURCES[0],
+    rw: "",
+    math: "",
+    minutes: "",
+    confidence: 3,
+    notes: "",
+  });
+  const [form, setForm] = useState(blankFor("Practice"));
+  const [editingId, setEditingId] = useState(null);
+  const [filter, setFilter] = useState("all"); // all | SAT | Practice
+
+  const setType = (testType) => {
+    // Reset source to a valid one for the chosen type.
+    setForm((f) => ({ ...f, testType, source: testType === "SAT" ? SAT_SOURCES[0] : PRACTICE_SOURCES[0] }));
   };
-  const remove = (id) => setAttempts(attempts.filter((a) => a.id !== id));
+
+  const total = (Number(form.rw) || 0) + (Number(form.math) || 0);
+  const valid = form.date && form.rw !== "" && form.math !== "";
+
+  const save = () => {
+    if (!valid) return;
+    const record = {
+      ...form,
+      rw: +form.rw,
+      math: +form.math,
+      minutes: +form.minutes || 0,
+    };
+    if (editingId) {
+      setAttempts(attempts.map((a) => (a.id === editingId ? { ...record, id: editingId } : a)));
+      setEditingId(null);
+    } else {
+      setAttempts([...attempts, { ...record, id: Date.now() }]);
+    }
+    setForm(blankFor(form.testType));
+  };
+
+  const startEdit = (a) => {
+    setEditingId(a.id);
+    setForm({
+      date: a.date, testType: a.testType || "Practice", source: a.source,
+      rw: String(a.rw), math: String(a.math), minutes: a.minutes ? String(a.minutes) : "",
+      confidence: a.confidence ?? 3, notes: a.notes || "",
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const cancelEdit = () => { setEditingId(null); setForm(blankFor(form.testType)); };
+  const remove = (id) => {
+    setAttempts(attempts.filter((a) => a.id !== id));
+    if (editingId === id) cancelEdit();
+  };
+
+  const sources = form.testType === "SAT" ? SAT_SOURCES : PRACTICE_SOURCES;
+  const shown = attempts
+    .filter((a) => filter === "all" || a.testType === filter)
+    .sort(byDateDesc);
 
   return (
     <>
-      <SectionTitle kicker="Log results" title="Practice Test Tracker" sub="Enter each score after finishing a test on any provider. This feeds your analytics and the AI planner." />
+      <SectionTitle kicker="Log results" title="Test Tracker" sub="Record both official SAT scores and practice-test scores. This is the source of truth for your header, analytics, and study plans." />
 
+      {/* form */}
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
+        {editingId && (
+          <div style={{ fontSize: 13, fontWeight: 600, color: C.accent2, marginBottom: 10 }}>Editing a saved result</div>
+        )}
+
+        {/* Test Type selector — prominent, drives the rest of the form */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: C.ink2, fontWeight: 600, marginBottom: 6 }}>Test Type</div>
+          <div style={{ display: "inline-flex", background: C.soft, borderRadius: 10, padding: 3 }}>
+            {["Practice", "SAT"].map((t) => (
+              <button key={t} onClick={() => setType(t)} style={{
+                padding: "7px 18px", borderRadius: 8, border: "none", fontSize: 13.5, fontWeight: 700,
+                background: form.testType === t ? (t === "SAT" ? C.accent : "#fff") : "transparent",
+                color: form.testType === t ? (t === "SAT" ? "#fff" : C.ink) : C.ink2,
+                boxShadow: form.testType === t && t !== "SAT" ? "0 1px 3px rgba(0,0,0,.08)" : "none",
+              }}>
+                {t === "SAT" ? "Official SAT" : "Practice"}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px,1fr))", gap: 12 }}>
           <Field label="Date"><input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} style={inp} /></Field>
           <Field label="Source">
             <select value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })} style={inp}>
-              {["Bluebook", "Khan", "UWorld", "Princeton Review", "Kaplan", "Magoosh", "Paper", "Book", "Tutor", "Other"].map((s) => <option key={s}>{s}</option>)}
+              {sources.map((s) => <option key={s}>{s}</option>)}
             </select>
           </Field>
-          <Field label="R&W (200–800)"><input type="number" value={form.rw} onChange={(e) => setForm({ ...form, rw: e.target.value })} style={inp} placeholder="620" /></Field>
-          <Field label="Math (200–800)"><input type="number" value={form.math} onChange={(e) => setForm({ ...form, math: e.target.value })} style={inp} placeholder="640" /></Field>
-          <Field label="Minutes"><input type="number" value={form.minutes} onChange={(e) => setForm({ ...form, minutes: e.target.value })} style={inp} placeholder="134" /></Field>
+          <Field label="Reading & Writing"><input type="number" value={form.rw} onChange={(e) => setForm({ ...form, rw: e.target.value })} style={inp} placeholder="620" /></Field>
+          <Field label="Math"><input type="number" value={form.math} onChange={(e) => setForm({ ...form, math: e.target.value })} style={inp} placeholder="640" /></Field>
+          <Field label="Total (auto)">
+            <div style={{ ...inp, background: C.soft, fontWeight: 700, color: C.ink }}>{total || "—"}</div>
+          </Field>
+          <Field label={`Minutes${form.testType === "SAT" ? " (optional)" : ""}`}><input type="number" value={form.minutes} onChange={(e) => setForm({ ...form, minutes: e.target.value })} style={inp} placeholder="134" /></Field>
           <Field label={`Confidence (${form.confidence}/5)`}><input type="range" min="1" max="5" value={form.confidence} onChange={(e) => setForm({ ...form, confidence: +e.target.value })} style={{ width: "100%" }} /></Field>
         </div>
         <Field label="Notes"><input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} style={inp} placeholder="What went well / what to fix" /></Field>
-        <button onClick={add} style={btnPrimary}>Add test result</button>
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={save} style={{ ...btnPrimary, opacity: valid ? 1 : 0.5 }}>{editingId ? "Save changes" : `Add ${form.testType === "SAT" ? "SAT" : "practice"} result`}</button>
+          {editingId && <button onClick={cancelEdit} style={btnGhostSolid}>Cancel</button>}
+        </div>
       </div>
 
-      {attempts.length === 0 ? (
-        <Empty text="No tests logged yet. Take a Bluebook test, then add your score above." />
+      {/* filter */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        {[["all", "All tests"], ["SAT", "Official SAT"], ["Practice", "Practice"]].map(([id, label]) => (
+          <button key={id} onClick={() => setFilter(id)} style={{
+            padding: "7px 14px", borderRadius: 20, border: `1px solid ${filter === id ? C.accent : C.line}`,
+            background: filter === id ? C.accent : C.card, color: filter === id ? "#fff" : C.ink2, fontSize: 13, fontWeight: 600,
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {/* history */}
+      {shown.length === 0 ? (
+        <Empty text={filter === "all" ? "No tests logged yet. Add an official SAT or practice result above." : `No ${filter === "SAT" ? "official SAT" : "practice"} results yet.`} />
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
-          {[...attempts].reverse().map((a) => {
-            const total = a.rw + a.math;
+          {shown.map((a) => {
+            const tot = totalOf(a);
+            const isSAT = a.testType === "SAT";
             return (
               <div key={a.id} className="sg-card" style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
                 <div>
-                  <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 28 }}>{total}<span style={{ fontSize: 14, color: C.ink2, fontFamily: FONT_BODY, fontWeight: 500 }}> total</span></div>
-                  <div style={{ fontSize: 13, color: C.ink2 }}>{a.date} · {a.source} · R&W {a.rw} · Math {a.math}{a.minutes ? ` · ${a.minutes} min` : ""}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 28 }}>{tot}</span>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "#fff", background: isSAT ? C.accent : C.paid, padding: "3px 8px", borderRadius: 6 }}>
+                      {isSAT ? "Official SAT" : "Practice"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 13, color: C.ink2, marginTop: 4 }}>{a.date} · {a.source} · R&W {a.rw} · Math {a.math}{a.minutes ? ` · ${a.minutes} min` : ""}{a.confidence ? ` · confidence ${a.confidence}/5` : ""}</div>
                   {a.notes && <div style={{ fontSize: 13, marginTop: 4, color: C.ink }}>“{a.notes}”</div>}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <span style={{ fontSize: 12, color: total >= goal.target ? C.accent : C.accent2, fontWeight: 700 }}>{total >= goal.target ? "On target" : `${goal.target - total} to go`}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button onClick={() => startEdit(a)} style={btnGhost}>Edit</button>
                   <button onClick={() => remove(a.id)} style={btnGhost}>Delete</button>
                 </div>
               </div>
@@ -567,23 +899,41 @@ function Tracker({ attempts, setAttempts, goal }) {
 }
 
 // ---------- 3. MISTAKE LOG ----------
-function Mistakes({ mistakes, setMistakes }) {
-  const blank = { date: "", source: "Bluebook", section: "Math", skill: SKILLS.Math[0], difficulty: "Medium", why: "Concept gap", concept: "", mastered: false };
+function Mistakes({ mistakes, setMistakes, attempts }) {
+  const blank = { date: "", testType: "Practice", source: "Bluebook", section: "Math", skill: SKILLS.Math[0], difficulty: "Medium", why: "Concept gap", concept: "", mastered: false };
   const [form, setForm] = useState(blank);
+  const [filter, setFilter] = useState("all"); // all | SAT | Practice
 
   const add = () => {
     if (!form.concept) return;
     setMistakes([...mistakes, { ...form, id: Date.now() }]);
-    setForm(blank);
+    setForm({ ...blank, testType: form.testType });
   };
   const toggle = (id) => setMistakes(mistakes.map((m) => (m.id === id ? { ...m, mastered: !m.mastered } : m)));
   const remove = (id) => setMistakes(mistakes.filter((m) => m.id !== id));
 
+  const shown = mistakes.filter((m) => filter === "all" || (m.testType || "Practice") === filter);
+
   return (
     <>
-      <SectionTitle kicker="Learn from errors" title="Mistake Log" sub="Record why you missed each question — not the copyrighted question itself, just the skill and the lesson. This is the single highest-leverage habit in test prep." />
+      <SectionTitle kicker="Learn from errors" title="Mistake Log" sub="Record why you missed each question — not the copyrighted question itself, just the skill and the lesson. Tag each as SAT or Practice so your plans can weigh them correctly." />
 
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
+        {/* Test Type selector */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, color: C.ink2, fontWeight: 600, marginBottom: 6 }}>Test Type</div>
+          <div style={{ display: "inline-flex", background: C.soft, borderRadius: 10, padding: 3 }}>
+            {["Practice", "SAT"].map((t) => (
+              <button key={t} onClick={() => setForm({ ...form, testType: t })} style={{
+                padding: "7px 18px", borderRadius: 8, border: "none", fontSize: 13.5, fontWeight: 700,
+                background: form.testType === t ? (t === "SAT" ? C.accent : "#fff") : "transparent",
+                color: form.testType === t ? (t === "SAT" ? "#fff" : C.ink) : C.ink2,
+                boxShadow: form.testType === t && t !== "SAT" ? "0 1px 3px rgba(0,0,0,.08)" : "none",
+              }}>{t === "SAT" ? "Official SAT" : "Practice"}</button>
+            ))}
+          </div>
+        </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px,1fr))", gap: 12 }}>
           <Field label="Date"><input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} style={inp} /></Field>
           <Field label="Section">
@@ -608,31 +958,45 @@ function Mistakes({ mistakes, setMistakes }) {
           </Field>
         </div>
         <Field label="The lesson (what's the correct concept?)"><input value={form.concept} onChange={(e) => setForm({ ...form, concept: e.target.value })} style={inp} placeholder="e.g. Isolate the variable before squaring both sides" /></Field>
-        <button onClick={add} style={btnPrimary}>Add to log</button>
+        <button onClick={add} style={{ ...btnPrimary, opacity: form.concept ? 1 : 0.5 }}>Add to log</button>
       </div>
 
-      {mistakes.length === 0 ? (
+      {/* filter */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        {[["all", "All"], ["SAT", "Official SAT"], ["Practice", "Practice"]].map(([id, label]) => (
+          <button key={id} onClick={() => setFilter(id)} style={{
+            padding: "7px 14px", borderRadius: 20, border: `1px solid ${filter === id ? C.accent : C.line}`,
+            background: filter === id ? C.accent : C.card, color: filter === id ? "#fff" : C.ink2, fontSize: 13, fontWeight: 600,
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {shown.length === 0 ? (
         <Empty text="No mistakes logged. After each test, add the ones you missed here." />
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
-          {[...mistakes].reverse().map((m) => (
-            <div key={m.id} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14, opacity: m.mastered ? 0.6 : 1 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                  <Tag c={m.section === "Math" ? C.accent2 : C.paid}>{m.section}</Tag>
-                  <Tag c={C.ink2}>{m.skill}</Tag>
-                  <Tag c={C.ink2}>{m.difficulty}</Tag>
-                  <Tag c={m.why === "Concept gap" ? "#B4443A" : C.ink2}>{m.why}</Tag>
+          {[...shown].reverse().map((m) => {
+            const isSAT = (m.testType || "Practice") === "SAT";
+            return (
+              <div key={m.id} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14, opacity: m.mastered ? 0.6 : 1 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                    <Tag c={isSAT ? C.accent : C.paid}>{isSAT ? "SAT" : "Practice"}</Tag>
+                    <Tag c={m.section === "Math" ? C.accent2 : C.ink2}>{m.section}</Tag>
+                    <Tag c={C.ink2}>{m.skill}</Tag>
+                    <Tag c={C.ink2}>{m.difficulty}</Tag>
+                    <Tag c={m.why === "Concept gap" ? "#B4443A" : C.ink2}>{m.why}</Tag>
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => toggle(m.id)} style={{ ...btnGhost, color: m.mastered ? C.accent : C.ink2 }}>{m.mastered ? "✓ Mastered" : "Mark mastered"}</button>
+                    <button onClick={() => remove(m.id)} style={btnGhost}>Delete</button>
+                  </div>
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={() => toggle(m.id)} style={{ ...btnGhost, color: m.mastered ? C.accent : C.ink2 }}>{m.mastered ? "✓ Mastered" : "Mark mastered"}</button>
-                  <button onClick={() => remove(m.id)} style={btnGhost}>Delete</button>
-                </div>
+                <div style={{ marginTop: 8, fontSize: 14 }}>{m.concept}</div>
+                {m.date && <div style={{ fontSize: 12, color: C.ink2, marginTop: 4 }}>{m.date}</div>}
               </div>
-              <div style={{ marginTop: 8, fontSize: 14 }}>{m.concept}</div>
-              {m.date && <div style={{ fontSize: 12, color: C.ink2, marginTop: 4 }}>{m.date} · {m.source}</div>}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </>
@@ -674,10 +1038,10 @@ function Analytics({ attempts, mistakes, goal }) {
                 </div>
               );
             })}
-            <div style={{ borderTop: `2px dashed ${C.accent2}`, position: "relative", flexBasis: "100%", alignSelf: "flex-start", marginTop: (1 - goal.target / maxTotal) * 160, order: 99, width: 0 }} />
+            <div style={{ borderTop: `2px dashed ${C.accent2}`, position: "relative", flexBasis: "100%", alignSelf: "flex-start", marginTop: (1 - goal.satTarget / maxTotal) * 160, order: 99, width: 0 }} />
           </div>
         )}
-        <div style={{ fontSize: 12, color: C.ink2, marginTop: 8 }}>Target: {goal.target} · latest gap tracked in the header.</div>
+        <div style={{ fontSize: 12, color: C.ink2, marginTop: 8 }}>Target (SAT): {goal.satTarget} · latest gap tracked in the header.</div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px,1fr))", gap: 16 }}>
@@ -710,109 +1074,315 @@ function Analytics({ attempts, mistakes, goal }) {
 }
 
 // ---------- 5. AI PLANNER ----------
-function Planner({ mistakes, attempts, goal, setGoal }) {
-  const [plan, setPlan] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+// ---------- 5. AI PLANNER (SAT + Practice tabs, saved history) ----------
+function Planner({ attempts, mistakes, goal, setGoal, plans, setPlans, setTab }) {
+  const [sub, setSub] = useState("SAT"); // SAT | Practice
+  const [openPlanId, setOpenPlanId] = useState(null);
 
-  // Local heuristic plan (works with no API). Your app can swap this for a Gemini/Claude call.
-  const buildLocalPlan = () => {
-    const skillMap = {};
-    mistakes.forEach((m) => { skillMap[m.skill] = (skillMap[m.skill] || 0) + 1; });
-    const weak = Object.entries(skillMap).sort((a, b) => b[1] - a[1]).slice(0, 3).map((x) => x[0]);
-    const latest = attempts[attempts.length - 1];
-    const total = latest ? latest.rw + latest.math : goal.current;
-    const gap = goal.target - total;
-    const days = Math.max(1, Math.ceil((new Date(goal.testDate) - new Date()) / 86400000));
-    const timeReasons = mistakes.filter((m) => m.why === "Ran out of time").length;
-    return {
-      summary: `You're ${gap > 0 ? gap : 0} points from ${goal.target}, with ~${days} days left. ${gap > 120 ? "Aggressive but doable with daily drilling." : gap > 0 ? "Very achievable with focused review." : "You're already at target — hold steady with light practice."}`,
-      focus: weak.length ? weak : ["Take a diagnostic Bluebook test first to find weak skills"],
-      today: weak[0] ? `Drill 10 ${weak[0]} questions in the Student Question Bank, then log every miss.` : "Take a full Bluebook test to establish a baseline.",
-      week: [
-        weak[0] ? `Two focused sessions on ${weak[0]} (your biggest leak).` : "Complete one full-length Bluebook test.",
-        weak[1] ? `One session on ${weak[1]}.` : "Review all Khan lessons for your weakest section.",
-        "One timed module to build pacing.",
-        timeReasons >= 2 ? "Pacing drill: cap Math questions at ~1.6 min each." : "Review your Mistake Log and re-try mastered items.",
-      ],
-      retake: gap > 200 && days < 30 ? "Consider whether this test date is realistic, or plan a second attempt." : "One well-prepared attempt looks reasonable.",
-    };
+  const latestSat = latestOfType(attempts, "SAT");
+  const latestPractice = latestOfType(attempts, "Practice");
+
+  const addPlan = (planObj) => {
+    const now = new Date().toISOString();
+    const record = { id: Date.now(), createdAt: now, updatedAt: now, ...planObj };
+    setPlans((prev) => [record, ...prev]);
+    setOpenPlanId(record.id);
   };
-
-  const generate = async (useAI) => {
-    setError(null);
-    // Real AI runs through the Netlify function at /api/plan, which holds the
-    // Gemini key server-side. If it's unreachable or errors, we fall back to the
-    // built-in rule engine so the button always produces a usable plan.
-    if (useAI) {
-      setLoading(true);
-      try {
-        const res = await fetch("/api/plan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ goal, attempts, mistakes }),
-        });
-        if (!res.ok) {
-          const detail = await res.json().catch(() => ({}));
-          throw new Error(detail.error || `Planner responded ${res.status}`);
-        }
-        const data = await res.json();
-        setPlan({ ...data, ai: true });
-      } catch (e) {
-        setError(`Couldn't generate the AI plan (${e.message}). Showing a rule-based plan instead.`);
-        setPlan({ ...buildLocalPlan(), ai: false });
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
-    setPlan({ ...buildLocalPlan(), ai: false });
+  const deletePlan = (id) => {
+    setPlans((prev) => prev.filter((p) => p.id !== id));
+    if (openPlanId === id) setOpenPlanId(null);
   };
 
   return (
     <>
-      <SectionTitle kicker="What to do next" title="AI Study Planner" sub="Set your goal, then generate a plan from your logged data. The AI version calls a model; the instant version uses a built-in rule engine so it always works." />
+      <SectionTitle kicker="What to do next" title="AI Study Planner" sub="Separate plans for the official SAT and for your next practice test. Each reads your saved scores and mistakes. AI plans use a model; Instant plans use a built-in rule engine that always works." />
 
-      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 18, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", gap: 12 }}>
-        <Field label="Current score"><input type="number" value={goal.current} onChange={(e) => setGoal({ ...goal, current: +e.target.value })} style={inp} /></Field>
-        <Field label="Target score"><input type="number" value={goal.target} onChange={(e) => setGoal({ ...goal, target: +e.target.value })} style={inp} /></Field>
-        <Field label="Test date"><input type="date" value={goal.testDate} onChange={(e) => setGoal({ ...goal, testDate: e.target.value })} style={inp} /></Field>
+      {/* sub-tabs */}
+      <div style={{ display: "inline-flex", background: C.soft, borderRadius: 12, padding: 4, marginBottom: 20 }}>
+        {[["SAT", "SAT Plan"], ["Practice", "Practice Plan"]].map(([id, label]) => (
+          <button key={id} onClick={() => setSub(id)} style={{
+            padding: "9px 22px", borderRadius: 9, border: "none", fontSize: 14, fontWeight: 700,
+            background: sub === id ? (id === "SAT" ? C.accent : "#fff") : "transparent",
+            color: sub === id ? (id === "SAT" ? "#fff" : C.ink) : C.ink2,
+            boxShadow: sub === id && id === "Practice" ? "0 1px 3px rgba(0,0,0,.08)" : "none",
+          }}>{label}</button>
+        ))}
       </div>
 
-      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-        <button onClick={() => generate(true)} style={btnPrimary} disabled={loading}>{loading ? "Thinking…" : "Generate AI plan"}</button>
-        <button onClick={() => generate(false)} style={btnGhostSolid}>Instant plan (no AI)</button>
-      </div>
-
-      {error && <div style={{ color: "#B4443A", fontSize: 13, marginBottom: 12 }}>{error}</div>}
-
-      {plan && (
-        <div style={{ display: "grid", gap: 14 }}>
-          <PlanCard title="Where you stand" body={plan.summary} badge={plan.ai ? "AI" : "Rule-based"} />
-          <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Focus skills</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{plan.focus.map((f) => <Tag key={f} c={C.accent}>{f}</Tag>)}</div>
-          </div>
-          <PlanCard title="Today" body={plan.today} />
-          <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>This week</div>
-            <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7, fontSize: 14 }}>{plan.week.map((w, i) => <li key={i}>{w}</li>)}</ul>
-          </div>
-          <PlanCard title="Retake outlook" body={plan.retake} />
-        </div>
+      {sub === "SAT" ? (
+        <PlanPanel
+          kind="SAT"
+          latest={latestSat}
+          supportingLatest={latestPractice}
+          target={goal.satTarget}
+          onTarget={(v) => setGoal({ ...goal, satTarget: v })}
+          nextDate={goal.nextSatDate}
+          onNextDate={(v) => setGoal({ ...goal, nextSatDate: v })}
+          attempts={attempts} mistakes={mistakes}
+          onAddPlan={addPlan} setTab={setTab}
+        />
+      ) : (
+        <PlanPanel
+          kind="Practice"
+          latest={latestPractice}
+          supportingLatest={null}
+          target={goal.practiceTarget}
+          onTarget={(v) => setGoal({ ...goal, practiceTarget: v })}
+          nextDate={goal.nextPracticeDate}
+          onNextDate={(v) => setGoal({ ...goal, nextPracticeDate: v })}
+          attempts={attempts} mistakes={mistakes}
+          onAddPlan={addPlan} setTab={setTab}
+        />
       )}
+
+      {/* Saved plans / history */}
+      <SavedPlans plans={plans} filterKind={sub} openPlanId={openPlanId} setOpenPlanId={setOpenPlanId} onDelete={deletePlan} />
     </>
   );
 }
 
-function PlanCard({ title, body, badge }) {
+function PlanPanel({ kind, latest, supportingLatest, target, onTarget, nextDate, onNextDate, attempts, mistakes, onAddPlan, setTab }) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const isSAT = kind === "SAT";
+  const latestScore = latest ? totalOf(latest) : null;
+  const gap = latestScore == null ? null : target - latestScore;
+
+  // Build a rule-based plan from the data for this kind.
+  const buildInstant = () => {
+    const typeMistakes = mistakes.filter((m) => (m.testType || "Practice") === kind);
+    // For SAT, also let practice mistakes inform (spec: both may inform SAT plan).
+    const pool = isSAT ? mistakes : typeMistakes;
+    const skillMap = {};
+    pool.forEach((m) => { skillMap[m.skill] = (skillMap[m.skill] || 0) + 1; });
+    const weak = Object.entries(skillMap).sort((a, b) => b[1] - a[1]).slice(0, 3).map((x) => x[0]);
+
+    const sectionMap = { "Reading & Writing": 0, Math: 0 };
+    pool.forEach((m) => { if (sectionMap[m.section] != null) sectionMap[m.section]++; });
+    const weakestSection = sectionMap.Math >= sectionMap["Reading & Writing"] ? "Math" : "Reading & Writing";
+
+    const days = daysUntil(nextDate);
+    const daysText = days == null ? "no date set yet" : days > 0 ? `~${days} days away` : "the date has passed";
+    const rw = latest ? latest.rw : null;
+    const math = latest ? latest.math : null;
+    const timeIssues = pool.filter((m) => m.why === "Ran out of time").length;
+
+    const gapText = gap == null ? "No score recorded yet." : gap <= 0 ? "You're at or above target." : `${gap} points to target.`;
+
+    const summaryBase = isSAT
+      ? (latestScore == null
+          ? `No official SAT score recorded yet.${supportingLatest ? ` Your latest practice score is ${totalOf(supportingLatest)}, useful as a baseline but not an official result.` : ""} Target ${target}. Next SAT ${daysText}.`
+          : `Current official SAT ${latestScore}. Target ${target}. ${gapText} Next SAT ${daysText}.`)
+      : (latestScore == null
+          ? `No practice score recorded yet. Target ${target}. Next practice test ${daysText}.`
+          : `Latest practice ${latestScore}. Target ${target}. ${gapText} Next practice test ${daysText}.`);
+
+    const focus = weak.length ? weak : ["Take a full test to reveal weak skills"];
+    const week = [
+      weak[0] ? `Two focused sessions on ${weak[0]} (your most-missed skill).` : "Complete one full-length test to establish a baseline.",
+      weak[1] ? `One session on ${weak[1]}.` : `Review ${weakestSection} fundamentals.`,
+      "One timed module to build pacing.",
+      timeIssues >= 2 ? "Pacing drill — you've run out of time repeatedly." : "Revisit unmastered items in your Mistake Log.",
+    ];
+    const nextAction = latestScore == null
+      ? (isSAT ? "Add your official SAT score in Test Tracker once you have it." : "Take a Bluebook practice test, then log it in Test Tracker.")
+      : `Focus your next sessions on ${weak[0] || weakestSection}.`;
+
+    return {
+      summary: summaryBase,
+      currentScore: latestScore,
+      targetScore: target,
+      gap: gap,
+      rw, math,
+      weakestSection,
+      focus,
+      week,
+      practiceSchedule: isSAT
+        ? (days && days > 14 ? "Take one full Bluebook test each week until your SAT." : "Take a final full timed Bluebook test 3–5 days before the SAT.")
+        : (days ? "Do timed section drills between now and your practice test." : "Schedule your next practice test to create a deadline."),
+      nextAction,
+    };
+  };
+
+  const saveAndShow = (planData, genType) => {
+    onAddPlan({
+      planType: kind,
+      genType,
+      currentScore: planData.currentScore ?? null,
+      targetScore: target,
+      testDate: nextDate || null,
+      content: planData,
+    });
+  };
+
+  const generate = async (useAI) => {
+    setError(null);
+    if (!useAI) { saveAndShow(buildInstant(), "Instant"); return; }
+    setLoading(true);
+    try {
+      const res = await fetch("/api/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          planKind: kind,
+          goal: { target, nextDate },
+          latest, supportingLatest,
+          attempts: attempts.filter((a) => isSAT || a.testType === "Practice"),
+          mistakes,
+        }),
+      });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Planner responded ${res.status}`); }
+      const data = await res.json();
+      // Merge AI text fields with computed numbers so the saved plan is complete.
+      const base = buildInstant();
+      saveAndShow({ ...base, ...data, currentScore: base.currentScore }, "AI");
+    } catch (e) {
+      setError(`Couldn't generate the AI plan (${e.message}). Saved a rule-based plan instead.`);
+      saveAndShow(buildInstant(), "Instant");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ fontWeight: 700 }}>{title}</div>
-        {badge && <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: C.accent, padding: "2px 8px", borderRadius: 6 }}>{badge}</span>}
+    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, marginBottom: 24 }}>
+      {/* current score (read-only, from tracker) */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px,1fr))", gap: 14, marginBottom: 8 }}>
+        <div>
+          <div style={{ fontSize: 12, color: C.ink2, fontWeight: 600, marginBottom: 5 }}>{isSAT ? "Current SAT Score" : "Current Practice Score"}</div>
+          {latestScore != null ? (
+            <div>
+              <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 26, lineHeight: 1 }}>{latestScore}</div>
+              <div style={{ fontSize: 12, color: C.ink2, marginTop: 3 }}>{latest.date} · R&W {latest.rw} · Math {latest.math}</div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13.5, color: C.accent2, fontWeight: 600, padding: "6px 0" }}>
+              {isSAT ? "No official SAT score recorded" : "No practice score recorded"}
+            </div>
+          )}
+          <button onClick={() => setTab("tracker")} style={{ ...btnGhost, paddingLeft: 0, color: C.accent, marginTop: 4 }}>
+            {isSAT ? "Add or edit SAT scores →" : "Add or edit practice scores →"}
+          </button>
+          {isSAT && latestScore == null && supportingLatest && (
+            <div style={{ fontSize: 12, color: C.ink2, marginTop: 4 }}>
+              Using latest practice ({totalOf(supportingLatest)}) as supporting context only.
+            </div>
+          )}
+        </div>
+
+        <Field label={isSAT ? "Target SAT Score" : "Target Practice Score"}>
+          <input type="number" value={target} onChange={(e) => onTarget(+e.target.value)} style={inp} />
+        </Field>
+        <Field label={isSAT ? "Next SAT Test Date" : "Next Practice Test Date"}>
+          <input type="date" value={nextDate || ""} onChange={(e) => onNextDate(e.target.value)} style={inp} />
+        </Field>
       </div>
-      <div style={{ fontSize: 14, color: C.ink2, marginTop: 6, lineHeight: 1.6 }}>{body}</div>
+
+      {gap != null && (
+        <div style={{ fontSize: 13, color: C.ink2, marginBottom: 14 }}>
+          Gap to target: <b style={{ color: gap <= 0 ? C.accent : C.ink }}>{gap <= 0 ? "Target reached" : `${gap} points`}</b>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <button onClick={() => generate(true)} style={btnPrimary} disabled={loading}>
+          {loading ? "Thinking…" : `Generate AI Plan for ${isSAT ? "SAT" : "Practice"}`}
+        </button>
+        <button onClick={() => generate(false)} style={btnGhostSolid}>
+          Instant Plan for {isSAT ? "SAT" : "Practice"} (No AI)
+        </button>
+      </div>
+
+      {error && <div style={{ color: "#B4443A", fontSize: 13, marginTop: 12 }}>{error}</div>}
+    </div>
+  );
+}
+
+// Render a stored plan's content.
+function PlanContent({ content }) {
+  if (!content) return null;
+  const c = content;
+  return (
+    <div style={{ display: "grid", gap: 12, marginTop: 4 }}>
+      {c.summary && <div style={{ fontSize: 14, color: C.ink, lineHeight: 1.6 }}>{c.summary}</div>}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {c.currentScore != null && <Tag c={C.ink2}>Current {c.currentScore}</Tag>}
+        {c.targetScore != null && <Tag c={C.accent}>Target {c.targetScore}</Tag>}
+        {c.gap != null && <Tag c={c.gap <= 0 ? C.accent : C.accent2}>{c.gap <= 0 ? "Target reached" : `Gap ${c.gap}`}</Tag>}
+        {c.rw != null && <Tag c={C.ink2}>R&W {c.rw}</Tag>}
+        {c.math != null && <Tag c={C.ink2}>Math {c.math}</Tag>}
+        {c.weakestSection && <Tag c={C.paid}>Focus: {c.weakestSection}</Tag>}
+      </div>
+
+      {Array.isArray(c.focus) && c.focus.length > 0 && (
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>Priority topics</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{c.focus.map((f, i) => <Tag key={i} c={C.accent}>{f}</Tag>)}</div>
+        </div>
+      )}
+
+      {Array.isArray(c.week) && c.week.length > 0 && (
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 6 }}>Weekly recommendations</div>
+          <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7, fontSize: 14 }}>{c.week.map((w, i) => <li key={i}>{w}</li>)}</ul>
+        </div>
+      )}
+
+      {c.practiceSchedule && <PlanRow label="Practice-test schedule" value={c.practiceSchedule} />}
+      {c.nextAction && <PlanRow label="Recommended next action" value={c.nextAction} />}
+    </div>
+  );
+}
+function PlanRow({ label, value }) {
+  return (
+    <div>
+      <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 14, color: C.ink2, lineHeight: 1.55 }}>{value}</div>
+    </div>
+  );
+}
+
+// Saved plan history for the current kind.
+function SavedPlans({ plans, filterKind, openPlanId, setOpenPlanId, onDelete }) {
+  const list = plans.filter((p) => p.planType === filterKind);
+  if (list.length === 0) {
+    return (
+      <div style={{ marginTop: 8 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8, fontFamily: FONT_DISPLAY }}>Saved {filterKind} plans</div>
+        <Empty text={`No ${filterKind} plans yet. Generate one above — every plan is saved here.`} />
+      </div>
+    );
+  }
+  const fmtDate = (iso) => { try { return new Date(iso).toLocaleString(); } catch { return iso; } };
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10, fontFamily: FONT_DISPLAY }}>Saved {filterKind} plans</div>
+      <div style={{ display: "grid", gap: 10 }}>
+        {list.map((p, idx) => {
+          const open = openPlanId === p.id;
+          return (
+            <div key={p.id} style={{ background: C.card, border: `1px solid ${idx === 0 ? C.accent : C.line}`, borderRadius: 12, overflow: "hidden" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "12px 16px", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  {idx === 0 && <Tag c={C.accent}>Latest</Tag>}
+                  <Tag c={p.genType === "AI" ? C.paid : C.ink2}>{p.genType}</Tag>
+                  <span style={{ fontSize: 13, color: C.ink2 }}>{fmtDate(p.createdAt)}</span>
+                  {p.currentScore != null && <span style={{ fontSize: 13, color: C.ink2 }}>· current {p.currentScore}</span>}
+                  {p.targetScore != null && <span style={{ fontSize: 13, color: C.ink2 }}>· target {p.targetScore}</span>}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={() => setOpenPlanId(open ? null : p.id)} style={btnGhost}>{open ? "Hide" : "Open"}</button>
+                  <button onClick={() => onDelete(p.id)} style={btnGhost}>Delete</button>
+                </div>
+              </div>
+              {open && <div style={{ padding: "0 16px 16px" }}><PlanContent content={p.content} /></div>}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -880,11 +1450,85 @@ function Simulator() {
 }
 
 // ---------- Manage data (backup / restore / reset) ----------
-function DataManager({ goal, attempts, mistakes, setGoal, setAttempts, setMistakes }) {
+// ---------- Profile & Settings ----------
+function ProfileSettings({ profile, setProfile, goal, setGoal, user, displayName }) {
+  const initials = initialsFrom(displayName);
+  const photo = user?.photoURL || null;
+
+  return (
+    <>
+      <SectionTitle kicker="Your account" title="Profile & Settings" sub="Set your name and study goal. Your name shows in the top-right menu and personalizes the app." />
+
+      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, marginBottom: 16, display: "flex", alignItems: "center", gap: 16 }}>
+        <Avatar photo={photo} initials={initials} size={56} />
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>{displayName}</div>
+          <div style={{ fontSize: 13, color: C.ink2 }}>{user?.email}</div>
+        </div>
+      </div>
+
+      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>Your name</div>
+        <p style={{ fontSize: 13, color: C.ink2, margin: "0 0 10px" }}>
+          {user?.displayName
+            ? "Signed in with Google. You can override the name shown in the app here."
+            : "Enter your name so the app can greet you instead of showing “Student.”"}
+        </p>
+        <input
+          value={profile.name}
+          onChange={(e) => setProfile({ ...profile, name: e.target.value })}
+          style={{ ...inp, maxWidth: 360 }}
+          placeholder="e.g. Ansh Sharma"
+        />
+      </div>
+
+      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20 }}>
+        <div style={{ fontWeight: 700, marginBottom: 4 }}>Goals & test dates</div>
+        <p style={{ fontSize: 12.5, color: C.ink2, margin: "0 0 12px" }}>These are also editable in the AI Planner. Changes save automatically.</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))", gap: 12 }}>
+          <Field label="SAT Target"><input type="number" value={goal.satTarget} onChange={(e) => setGoal({ ...goal, satTarget: +e.target.value })} style={inp} /></Field>
+          <Field label="Next SAT date"><input type="date" value={goal.nextSatDate} onChange={(e) => setGoal({ ...goal, nextSatDate: e.target.value })} style={inp} /></Field>
+          <Field label="Practice Target"><input type="number" value={goal.practiceTarget} onChange={(e) => setGoal({ ...goal, practiceTarget: +e.target.value })} style={inp} /></Field>
+          <Field label="Next practice date"><input type="date" value={goal.nextPracticeDate} onChange={(e) => setGoal({ ...goal, nextPracticeDate: e.target.value })} style={inp} /></Field>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---------- Help ----------
+function Help() {
+  const faqs = [
+    ["Is my practice data saved?", "Yes. Everything you log is tied to your account and syncs across any device you sign in on. The top-right indicator shows when it's saving."],
+    ["How do I take a real practice test?", "Go to the Practice Hub tab. Start with College Board's Bluebook — it's the actual test-day app and the most realistic practice available. Each card opens the provider directly."],
+    ["Does SATGene score my SAT?", "No. SATGene tracks and analyzes results you enter and gives study guidance. Official scoring comes from Bluebook. The Simulator reproduces the real timing and structure for practice, not an official score."],
+    ["How do I back up my data?", "Open the profile menu (top right) → Import / Export Data. You can download a backup file and restore it later or on another device."],
+    ["The AI planner shows a rule-based plan. Why?", "If the AI service isn't reachable, the planner falls back to a built-in rule engine so you always get a usable plan."],
+  ];
+  return (
+    <>
+      <SectionTitle kicker="Support" title="Help" sub="Quick answers to common questions about SATGene." />
+      <div style={{ display: "grid", gap: 10 }}>
+        {faqs.map(([q, a]) => (
+          <div key={q} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5, marginBottom: 5 }}>{q}</div>
+            <div style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.55 }}>{a}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 16, fontSize: 13, color: C.ink2 }}>
+        SATGene is a study companion. It links to official and vendor practice and never copies their questions.
+      </div>
+    </>
+  );
+}
+
+// ---------- Manage data (backup / restore / reset) ----------
+function DataManager({ profile, goal, attempts, mistakes, plans, setGoal, setAttempts, setMistakes, setPlans }) {
   const [msg, setMsg] = useState(null);
 
   const exportData = () => {
-    const payload = { version: 1, exportedAt: new Date().toISOString(), goal, attempts, mistakes };
+    const payload = { version: 2, exportedAt: new Date().toISOString(), profile, goal, attempts, mistakes, plans };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -892,7 +1536,7 @@ function DataManager({ goal, attempts, mistakes, setGoal, setAttempts, setMistak
     a.download = `satgene-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    setMsg({ kind: "ok", text: "Backup downloaded. Keep this file to restore your data on any device." });
+    setMsg({ kind: "ok", text: "Backup downloaded." });
   };
 
   const importData = (e) => {
@@ -901,11 +1545,12 @@ function DataManager({ goal, attempts, mistakes, setGoal, setAttempts, setMistak
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const data = JSON.parse(reader.result);
-        if (data.goal) setGoal(data.goal);
+        const data = migrateUserData(JSON.parse(reader.result));
+        if (data.goal) setGoal({ ...DEFAULT_GOAL, ...data.goal });
         if (Array.isArray(data.attempts)) setAttempts(data.attempts);
         if (Array.isArray(data.mistakes)) setMistakes(data.mistakes);
-        setMsg({ kind: "ok", text: "Backup restored. Your tests and mistakes are back." });
+        if (Array.isArray(data.plans)) setPlans(data.plans);
+        setMsg({ kind: "ok", text: "Backup restored to your account." });
       } catch {
         setMsg({ kind: "err", text: "That file couldn't be read. Use a SATGene backup file (.json)." });
       }
@@ -915,25 +1560,25 @@ function DataManager({ goal, attempts, mistakes, setGoal, setAttempts, setMistak
   };
 
   const resetAll = () => {
-    if (!window.confirm("Erase all saved tests, mistakes, and your goal on this browser? This can't be undone.")) return;
+    if (!window.confirm("Erase all saved tests, mistakes, plans, and goals from your account? This can't be undone.")) return;
     setGoal(DEFAULT_GOAL);
     setAttempts([]);
     setMistakes([]);
-    setMsg({ kind: "ok", text: "All data cleared on this browser." });
+    setPlans([]);
+    setMsg({ kind: "ok", text: "All data cleared from your account." });
   };
 
   return (
     <>
       <SectionTitle
         kicker="Your saved work"
-        title="Manage data"
-        sub="Your results are saved automatically in this browser, so they're here when you come back. Back them up to a file to move between devices or guard against clearing your browser."
+        title="Import / Export Data"
+        sub="Your data is saved to your account and syncs across devices when you sign in. Export a file for an extra backup or to move data manually."
       />
 
       <div style={{ background: C.soft, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 18, fontSize: 14, color: C.ink2, lineHeight: 1.6 }}>
-        <b style={{ color: C.ink }}>How saving works:</b> everything you log is stored on <b>this device and browser</b>.
-        It survives refreshes and closing the tab. It does <b>not</b> follow you to another device or browser, and it
-        can be lost if you clear browsing data. For anything you care about, download a backup below.
+        <b style={{ color: C.ink }}>How saving works:</b> everything you log is stored under <b>your account</b> and
+        is available on any device where you sign in. Exporting gives you a portable copy you can re-import later.
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px,1fr))", gap: 14 }}>
