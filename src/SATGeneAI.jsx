@@ -428,7 +428,7 @@ function AppShell({ user }) {
         {tab === "hub" && <Hub />}
         {tab === "tracker" && <Tracker attempts={attempts} setAttempts={setAttempts} />}
         {tab === "mistakes" && <Mistakes mistakes={mistakes} setMistakes={setMistakes} attempts={attempts} />}
-        {tab === "analytics" && <Analytics attempts={attempts} mistakes={mistakes} goal={goal} />}
+        {tab === "analytics" && <Analytics attempts={attempts} mistakes={mistakes} goal={goal} setTab={setTab} />}
         {tab === "planner" && (
           <Planner
             attempts={attempts} mistakes={mistakes} goal={goal} setGoal={setGoal}
@@ -1150,75 +1150,653 @@ function Mistakes({ mistakes, setMistakes, attempts }) {
 }
 
 // ---------- 4. ANALYTICS ----------
-function Analytics({ attempts, mistakes, goal }) {
-  const skillCounts = useMemo(() => {
-    const map = {};
-    mistakes.forEach((m) => { map[m.skill] = (map[m.skill] || 0) + 1; });
-    return Object.entries(map).sort((a, b) => b[1] - a[1]);
-  }, [mistakes]);
+// ============================================================
+// ANALYTICS UTILITIES — deterministic, testable, no AI.
+// Test Tracker is the source of truth for scores; Mistake Log for patterns.
+// ============================================================
 
-  const whyCounts = useMemo(() => {
-    const map = {};
-    mistakes.forEach((m) => { map[m.why] = (map[m.why] || 0) + 1; });
-    return Object.entries(map).sort((a, b) => b[1] - a[1]);
-  }, [mistakes]);
+// A record is valid only if it has a type, a real date, section scores in 200–800,
+// and a total in 400–1600 that equals rw+math. Invalid records are excluded from
+// analytics (but never deleted — they stay in Test Tracker for correction).
+function isValidScoreRecord(a) {
+  if (!a) return false;
+  if (a.testType !== "SAT" && a.testType !== "Practice") return false;
+  if (!a.date || isNaN(new Date(a.date).getTime())) return false;
+  const rw = Number(a.rw), math = Number(a.math);
+  if (!Number.isFinite(rw) || rw < 200 || rw > 800) return false;
+  if (!Number.isFinite(math) || math < 200 || math > 800) return false;
+  const total = rw + math;
+  if (total < 400 || total > 1600) return false;
+  return true;
+}
 
-  const maxTotal = 1600;
+function partitionValidity(attempts) {
+  const valid = [], invalid = [];
+  (attempts || []).forEach((a) => (isValidScoreRecord(a) ? valid : invalid).push(a));
+  return { valid, invalid };
+}
+
+// Chronological ascending by true test date (never text sort, never creation time).
+const byDateAsc = (a, b) => new Date(a.date) - new Date(b.date);
+
+const fmtFull = (d) => { try { return new Date(d).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" }); } catch { return String(d); } };
+const fmtAbbr = (d) => { try { return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" }); } catch { return String(d); } };
+
+const avg = (arr) => (arr.length ? Math.round(arr.reduce((s, x) => s + x, 0) / arr.length) : null);
+
+// Change vs the previous record OF THE SAME TYPE (never cross-type).
+function changeVsPrevSameType(sortedValid, record) {
+  const sameType = sortedValid.filter((a) => a.testType === record.testType);
+  const idx = sameType.findIndex((a) => a.id === record.id);
+  if (idx <= 0) return null;
+  return totalOf(record) - totalOf(sameType[idx - 1]);
+}
+
+// Section summary for "rw" or "math" over a given scope of valid records.
+function sectionSummary(validSorted, field) {
+  const scores = validSorted.map((a) => Number(a[field]));
+  if (!scores.length) return null;
+  const latest = scores[scores.length - 1];
+  const best = Math.max(...scores);
+  const lastThreePractice = validSorted.filter((a) => a.testType === "Practice").slice(-3).map((a) => Number(a[field]));
+  const lastThreeAvg = avg(lastThreePractice);
+  const latestType = validSorted[validSorted.length - 1].testType;
+  const sameType = validSorted.filter((a) => a.testType === latestType).map((a) => Number(a[field]));
+  const window = sameType.slice(-3);
+  const changeLastThree = window.length >= 2 ? window[window.length - 1] - window[0] : null;
+  return { latest, best, lastThreeAvg, changeLastThree };
+}
+
+// Suggested per-section planning target from the total SAT target (transparent 50/50
+// split, rounded to 10s). Clearly NOT an official target.
+function suggestedSectionTargets(satTarget) {
+  const half = Math.round((satTarget / 2) / 10) * 10;
+  return { rw: half, math: satTarget - half };
+}
+
+// Practice consistency from recent valid practice totals. Transparent thresholds.
+const CONSISTENCY_THRESHOLDS = { consistent: 30, moderate: 60 };
+function practiceConsistency(validSorted) {
+  const totals = validSorted.filter((a) => a.testType === "Practice").slice(-3).map(totalOf);
+  if (totals.length < 3) return { status: "Insufficient data", average: avg(totals), best: totals.length ? Math.max(...totals) : null, low: totals.length ? Math.min(...totals) : null, range: null, count: totals.length };
+  const best = Math.max(...totals), low = Math.min(...totals), range = best - low;
+  let status = "Variable";
+  if (range <= CONSISTENCY_THRESHOLDS.consistent) status = "Consistent";
+  else if (range <= CONSISTENCY_THRESHOLDS.moderate) status = "Moderately consistent";
+  return { status, average: avg(totals), best, low, range, count: totals.length };
+}
+
+// Mistake categories grouped by skill, prioritized. mastered=false means unresolved.
+function mistakeCategories(mistakes, limit = 5) {
+  const groups = {};
+  (mistakes || []).forEach((m) => {
+    const key = m.skill || "Uncategorized";
+    if (!groups[key]) groups[key] = { skill: key, section: m.section, total: 0, unresolved: 0, dates: new Set(), types: new Set(), last: null };
+    const g = groups[key];
+    g.total++;
+    if (!m.mastered) g.unresolved++;
+    if (m.date) { g.dates.add(m.date); if (!g.last || new Date(m.date) > new Date(g.last)) g.last = m.date; }
+    if (m.testType) g.types.add(m.testType);
+  });
+  return Object.values(groups)
+    .map((g) => ({ ...g, testsSeen: g.dates.size, sources: [...g.types] }))
+    .sort((a, b) => b.unresolved - a.unresolved || b.total - a.total || (new Date(b.last || 0) - new Date(a.last || 0)))
+    .slice(0, limit);
+}
+
+// SAT readiness — transparent rule-based status from best applicable score vs target.
+function satReadiness({ superscore, latestSat, practiceAvg, target, practiceCount }) {
+  const applicable = superscore != null ? superscore : latestSat != null ? latestSat : null;
+  if (applicable == null && (practiceCount || 0) < 2) return { status: "Insufficient Data", applicable: null, gap: null };
+  const basis = applicable != null ? applicable : practiceAvg;
+  if (basis == null) return { status: "Insufficient Data", applicable: null, gap: null };
+  const gap = target - basis;
+  let status;
+  if (gap <= 0) status = basis > target ? "Above Target" : "At Target";
+  else if (gap <= 30) status = "Approaching Target";
+  else if (gap <= 90) status = "Improving";
+  else status = "Building Foundation";
+  return { status, applicable, gap: Math.max(0, gap), basisIsSuperscore: superscore != null };
+}
+
+function Analytics({ attempts, mistakes, goal, setTab }) {
+  const [testFilter, setTestFilter] = useState("all");   // all | Practice | SAT
+  const [scoreFilter, setScoreFilter] = useState("total"); // total | rw | math
+
+  const { valid, invalid } = useMemo(() => partitionValidity(attempts), [attempts]);
+  const sorted = useMemo(() => [...valid].sort(byDateAsc), [valid]);
+
+  const satsAsc = useMemo(() => sorted.filter((a) => a.testType === "SAT"), [sorted]);
+  const pracAsc = useMemo(() => sorted.filter((a) => a.testType === "Practice"), [sorted]);
+  const latestSat = satsAsc.length ? satsAsc[satsAsc.length - 1] : null;
+  const latestPractice = pracAsc.length ? pracAsc[pracAsc.length - 1] : null;
+  const superscore = useMemo(() => computeSuperscore(valid), [valid]);
+  const target = goal.satTarget;
+  const practiceLast3Avg = avg(pracAsc.slice(-3).map(totalOf));
+  const daysToSat = daysUntil(goal.nextSatDate);
+
+  // Gap basis: superscore if available, else latest applicable score.
+  const gapBasis = superscore ? superscore.total : (latestSat ? totalOf(latestSat) : (latestPractice ? totalOf(latestPractice) : null));
+  const gapBasisLabel = superscore ? "Based on superscore" : latestSat ? "Based on latest SAT" : latestPractice ? "Based on latest practice" : null;
+  const gap = gapBasis == null ? null : Math.max(0, target - gapBasis);
+  const targetReached = gapBasis != null && gapBasis >= target;
+
+  const readiness = useMemo(() => satReadiness({
+    superscore: superscore ? superscore.total : null,
+    latestSat: latestSat ? totalOf(latestSat) : null,
+    practiceAvg: practiceLast3Avg,
+    target,
+    practiceCount: pracAsc.length,
+  }), [superscore, latestSat, practiceLast3Avg, target, pracAsc.length]);
+
+  const categories = useMemo(() => mistakeCategories(mistakes, 5), [mistakes]);
+  const secTargets = suggestedSectionTargets(target);
+
+  const hasAnyValid = valid.length > 0;
+
   return (
     <>
-      <SectionTitle kicker="See the pattern" title="Analytics" sub="Your score trajectory and where points are leaking. Everything here comes from the tests and mistakes you logged." />
+      <SectionTitle kicker="See the pattern" title="Analytics" sub="Your Test Tracker and Mistake Log turned into clear, actionable insights. All calculations are deterministic — no AI." />
 
-      {/* Score trend */}
-      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, marginBottom: 16 }}>
-        <div style={{ fontWeight: 700, marginBottom: 14 }}>Score trend</div>
-        {attempts.length === 0 ? <Empty text="Log tests to see your trend." /> : (
-          <div className="sg-nav-scroll" style={{ width: "100%", maxWidth: "100%" }}>
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 14, height: 180, borderBottom: `1px solid ${C.line}`, paddingBottom: 4, minWidth: "min-content" }}>
-              {attempts.map((a) => {
-                const total = a.rw + a.math;
-                const h = (total / maxTotal) * 160;
-                return (
-                  <div key={a.id} style={{ flex: "1 0 44px", textAlign: "center", minWidth: 44 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>{total}</div>
-                    <div style={{ position: "relative", height: h, background: `linear-gradient(${C.accent}, ${C.official})`, borderRadius: "6px 6px 0 0" }} />
-                    <div style={{ fontSize: 10, color: C.ink2, marginTop: 4 }}>{a.date?.slice(5)}</div>
-                  </div>
-                );
-              })}
-            </div>
+      {invalid.length > 0 && (
+        <div style={{ background: "#FBEAE8", border: "1px solid #E3B7B3", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13.5, color: "#B4443A" }}>
+            {invalid.length} test record{invalid.length === 1 ? " was" : "s were"} excluded because {invalid.length === 1 ? "its score is" : "their scores are"} incomplete or invalid.
+          </span>
+          <button onClick={() => setTab("tracker")} style={{ ...btnGhostSolid, marginTop: 0, color: "#B4443A", borderColor: "#E3B7B3" }}>Review in Test Tracker</button>
+        </div>
+      )}
+
+      {!hasAnyValid ? (
+        <EmptyState
+          title="Add an SAT or practice-test result to begin tracking your progress."
+          button="Add Test Result" onClick={() => setTab("tracker")}
+        />
+      ) : (
+        <>
+          {/* 1. PERFORMANCE OVERVIEW */}
+          <SubHeading>Performance Overview</SubHeading>
+          <div className="sg-grid" style={{ marginBottom: 20 }}>
+            <OverviewCard title="Latest Official SAT" empty={!latestSat ? "No official SAT recorded" : null}
+              main={latestSat ? totalOf(latestSat) : null}
+              lines={latestSat ? [fmtFull(latestSat.date), `R&W ${latestSat.rw}`, `Math ${latestSat.math}`] : []} />
+            <OverviewCard title="Latest Practice" empty={!latestPractice ? "No practice score recorded" : null}
+              main={latestPractice ? totalOf(latestPractice) : null}
+              lines={latestPractice ? [fmtFull(latestPractice.date), `R&W ${latestPractice.rw}`, `Math ${latestPractice.math}`] : []} />
+            <OverviewCard title="Superscore" accent empty={!superscore ? "Not available" : null}
+              main={superscore ? superscore.total : null}
+              emptySub={!superscore ? "Requires 2 SAT tests" : null}
+              lines={superscore ? [`R&W ${superscore.rw} · ${fmtAbbr(superscore.rwDate)}`, `Math ${superscore.math} · ${fmtAbbr(superscore.mathDate)}`] : []} />
+            <OverviewCard title="Target Progress"
+              main={targetReached ? "✓" : gap}
+              mainLabel={targetReached ? null : "pts remaining"}
+              lines={targetReached
+                ? ["Target reached", `Target ${target}`]
+                : [`Target ${target}`, gapBasisLabel, daysToSat != null ? `${daysToSat > 0 ? daysToSat : 0} days to SAT` : "SAT not scheduled"].filter(Boolean)} />
           </div>
-        )}
-        <div style={{ fontSize: 12, color: C.ink2, marginTop: 8 }}>Target (SAT): {goal.satTarget} · latest gap tracked in the header.</div>
-      </div>
 
-      <div className="sg-grid">
-        <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20 }}>
-          <div style={{ fontWeight: 700, marginBottom: 14 }}>Weakest skills (by misses)</div>
-          {skillCounts.length === 0 ? <Empty text="No mistakes logged yet." /> : skillCounts.map(([skill, n]) => (
-            <div key={skill} style={{ marginBottom: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 3 }}><span>{skill}</span><b>{n}</b></div>
-              <div style={{ height: 8, background: C.soft, borderRadius: 4 }}>
-                <div style={{ width: `${(n / skillCounts[0][1]) * 100}%`, height: "100%", background: C.accent2, borderRadius: 4 }} />
-              </div>
-            </div>
-          ))}
-        </div>
+          {/* 2. SCORE PROGRESS */}
+          <SubHeading>Score Progress</SubHeading>
+          <ChartCard>
+            <FilterRow>
+              <FilterGroup label="Test" value={testFilter} setValue={setTestFilter} options={[["all", "All Tests"], ["Practice", "Practice"], ["SAT", "SAT"]]} />
+              <FilterGroup label="Score" value={scoreFilter} setValue={setScoreFilter} options={[["total", "Total"], ["rw", "R&W"], ["math", "Math"]]} />
+            </FilterRow>
+            <ScoreProgressChart sorted={sorted} testFilter={testFilter} scoreFilter={scoreFilter} target={target} secTargets={secTargets} />
+          </ChartCard>
 
-        <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20 }}>
-          <div style={{ fontWeight: 700, marginBottom: 14 }}>Why you miss questions</div>
-          {whyCounts.length === 0 ? <Empty text="No mistakes logged yet." /> : whyCounts.map(([why, n]) => (
-            <div key={why} style={{ marginBottom: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 3 }}><span>{why}</span><b>{n}</b></div>
-              <div style={{ height: 8, background: C.soft, borderRadius: 4 }}>
-                <div style={{ width: `${(n / whyCounts[0][1]) * 100}%`, height: "100%", background: C.paid, borderRadius: 4 }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+          {/* 3. SECTION PROGRESS */}
+          <SubHeading>Section Progress</SubHeading>
+          <ChartCard>
+            <SectionProgressBlock sorted={sorted} testFilter={testFilter} setTestFilter={setTestFilter} target={target} secTargets={secTargets} />
+          </ChartCard>
+
+          {/* 4. WHAT THE DATA SAYS */}
+          <SubHeading>What the Data Says</SubHeading>
+          <InsightsBlock sorted={sorted} satsAsc={satsAsc} pracAsc={pracAsc} superscore={superscore} target={target} practiceLast3Avg={practiceLast3Avg} secTargets={secTargets} />
+
+          {/* 5. PRACTICE CONSISTENCY */}
+          <SubHeading>Practice Consistency</SubHeading>
+          <ConsistencyBlock sorted={sorted} />
+
+          {/* 6. WHERE POINTS ARE LEAKING */}
+          <SubHeading>Where Points Are Leaking</SubHeading>
+          <LeakingBlock categories={categories} setTab={setTab} />
+
+          {/* 7. SAT READINESS */}
+          <SubHeading>SAT Readiness</SubHeading>
+          <ReadinessBlock readiness={readiness} superscore={superscore} latestSat={latestSat} practiceLast3Avg={practiceLast3Avg} target={target} daysToSat={daysToSat} />
+
+          {/* 8. RECOMMENDED NEXT STEPS */}
+          <SubHeading>Recommended Next Steps</SubHeading>
+          <NextStepsBlock categories={categories} sorted={sorted} secTargets={secTargets} latestSat={latestSat} pracAsc={pracAsc} goal={goal} setTab={setTab} />
+
+          {/* 9. TEST HISTORY */}
+          <SubHeading>Test History</SubHeading>
+          <TestHistoryBlock valid={valid} />
+        </>
+      )}
     </>
   );
 }
+
+// ---- shared small pieces ----
+function SubHeading({ children }) {
+  return <h3 style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 19, margin: "26px 0 12px" }}>{children}</h3>;
+}
+function ChartCard({ children }) {
+  return <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 4 }}>{children}</div>;
+}
+function EmptyState({ title, button, onClick, sub }) {
+  return (
+    <div style={{ background: C.soft, border: `1px solid ${C.line}`, borderRadius: 14, padding: 28, textAlign: "center" }}>
+      <div style={{ fontSize: 14.5, color: C.ink, marginBottom: sub ? 6 : 14 }}>{title}</div>
+      {sub && <div style={{ fontSize: 13, color: C.ink2, marginBottom: 14 }}>{sub}</div>}
+      {button && <button onClick={onClick} style={{ ...btnPrimary, marginTop: 0 }}>{button}</button>}
+    </div>
+  );
+}
+function OverviewCard({ title, main, mainLabel, lines = [], empty, emptySub, accent }) {
+  return (
+    <div style={{ background: C.card, border: `1px solid ${accent ? C.accent : C.line}`, borderRadius: 14, padding: 16 }}>
+      <div style={{ fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.6, color: accent ? C.accent : C.ink2, fontWeight: 700 }}>{title}</div>
+      {empty ? (
+        <>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 15, color: C.ink2, marginTop: 6 }}>{empty}</div>
+          {emptySub && <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 2 }}>{emptySub}</div>}
+        </>
+      ) : (
+        <>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 30, color: C.ink, lineHeight: 1.05, marginTop: 4 }}>
+            {main}{mainLabel && <span style={{ fontSize: 13, fontFamily: FONT_BODY, fontWeight: 500, color: C.ink2 }}> {mainLabel}</span>}
+          </div>
+          {lines.map((l, i) => <div key={i} style={{ fontSize: 12, color: C.ink2, marginTop: 2, overflowWrap: "anywhere" }}>{l}</div>)}
+        </>
+      )}
+    </div>
+  );
+}
+function FilterRow({ children }) {
+  return <div className="sg-nav-scroll" style={{ display: "flex", gap: 16, marginBottom: 14, paddingBottom: 2 }}>{children}</div>;
+}
+function FilterGroup({ label, value, setValue, options }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" }}>
+      <span style={{ fontSize: 12, color: C.ink2, fontWeight: 600 }}>{label}:</span>
+      <div style={{ display: "inline-flex", background: C.soft, borderRadius: 8, padding: 2 }} role="group" aria-label={label}>
+        {options.map(([id, lbl]) => (
+          <button key={id} onClick={() => setValue(id)} className="sg-focus" aria-pressed={value === id} style={{
+            padding: "5px 11px", borderRadius: 6, border: "none", fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap",
+            background: value === id ? "#fff" : "transparent", color: value === id ? C.ink : C.ink2,
+            boxShadow: value === id ? "0 1px 2px rgba(0,0,0,.08)" : "none",
+          }}>{lbl}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---- 2. Score Progress chart (SVG line + distinct markers) ----
+function ScoreProgressChart({ sorted, testFilter, scoreFilter, target, secTargets }) {
+  const field = scoreFilter; // total|rw|math
+  const valOf = (a) => (field === "total" ? totalOf(a) : Number(a[field]));
+  const refLine = field === "total" ? target : field === "rw" ? secTargets.rw : secTargets.math;
+
+  const points = sorted
+    .filter((a) => testFilter === "all" || a.testType === testFilter)
+    .map((a) => ({ a, x: new Date(a.date).getTime(), y: valOf(a), type: a.testType }));
+
+  if (points.length === 0) {
+    return <Empty text="No records match this filter yet." />;
+  }
+
+  // chart geometry
+  const W = 680, H = 260, padL = 44, padR = 16, padT = 24, padB = 34;
+  const yMin = field === "total" ? 400 : 200, yMax = field === "total" ? 1600 : 800;
+  const xs = points.map((p) => p.x);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const xSpan = xMax - xMin || 1;
+  const sx = (x) => padL + ((x - xMin) / xSpan) * (W - padL - padR);
+  const sy = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * (H - padT - padB);
+
+  // Connect only same-type sequences (don't mislead across types).
+  const seq = (type) => points.filter((p) => p.type === type).map((p) => `${sx(p.x)},${sy(p.y)}`).join(" ");
+  const refY = sy(refLine);
+
+  const [hover, setHover] = useState(null);
+
+  const summaryText = `Score progress chart. ${points.length} records shown. ` +
+    points.map((p) => `${p.type} ${fmtAbbr(p.a.date)}: ${p.y}.`).join(" ");
+
+  return (
+    <div>
+      <div className="sg-nav-scroll" style={{ width: "100%" }}>
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ minWidth: 340, display: "block" }} role="img" aria-label={summaryText}>
+          {/* y gridlines */}
+          {[0, 0.25, 0.5, 0.75, 1].map((t, i) => {
+            const yv = yMin + t * (yMax - yMin);
+            const yy = sy(yv);
+            return <g key={i}>
+              <line x1={padL} y1={yy} x2={W - padR} y2={yy} stroke={C.soft} strokeWidth="1" />
+              <text x={padL - 6} y={yy + 3} textAnchor="end" fontSize="9" fill={C.ink2}>{Math.round(yv)}</text>
+            </g>;
+          })}
+          {/* target reference line */}
+          <line x1={padL} y1={refY} x2={W - padR} y2={refY} stroke={C.accent2} strokeWidth="1.5" strokeDasharray="5 4" />
+          <text x={W - padR} y={refY - 4} textAnchor="end" fontSize="9" fill={C.accent2} fontWeight="700">Target {refLine}</text>
+
+          {/* same-type connecting lines */}
+          {(testFilter === "all" || testFilter === "Practice") && <polyline points={seq("Practice")} fill="none" stroke={C.paid} strokeWidth="2" />}
+          {(testFilter === "all" || testFilter === "SAT") && <polyline points={seq("SAT")} fill="none" stroke={C.accent} strokeWidth="2" />}
+
+          {/* markers: SAT = diamond, Practice = circle (shape, not just color) */}
+          {points.map((p, i) => {
+            const cx = sx(p.x), cy = sy(p.y);
+            const isSAT = p.type === "SAT";
+            return (
+              <g key={i} onMouseEnter={() => setHover(p)} onMouseLeave={() => setHover(null)} style={{ cursor: "pointer" }} tabIndex={0}
+                 onFocus={() => setHover(p)} onBlur={() => setHover(null)}>
+                {isSAT
+                  ? <rect x={cx - 5} y={cy - 5} width="10" height="10" transform={`rotate(45 ${cx} ${cy})`} fill={C.accent} />
+                  : <circle cx={cx} cy={cy} r="5" fill={C.paid} />}
+                <text x={cx} y={cy - 10} textAnchor="middle" fontSize="9" fontWeight="700" fill={C.ink}>{p.y}</text>
+              </g>
+            );
+          })}
+          {/* x labels */}
+          {points.map((p, i) => (
+            <text key={i} x={sx(p.x)} y={H - 10} textAnchor="middle" fontSize="9" fill={C.ink2}>{fmtAbbr(p.a.date)}</text>
+          ))}
+        </svg>
+      </div>
+
+      {/* legend (shape-based, wraps) */}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 8, fontSize: 12, color: C.ink2 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, background: C.paid, borderRadius: "50%", display: "inline-block" }} /> Practice (circle)</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, background: C.accent, display: "inline-block", transform: "rotate(45deg)" }} /> Official SAT (diamond)</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 14, height: 0, borderTop: `2px dashed ${C.accent2}`, display: "inline-block" }} /> Target</span>
+      </div>
+
+      {hover && <ChartTooltip p={hover} sorted={sorted} field={field} />}
+    </div>
+  );
+}
+
+function ChartTooltip({ p, sorted, field }) {
+  const change = changeVsPrevSameType([...sorted].sort(byDateAsc), p.a);
+  const typeLabel = p.type === "SAT" ? "Official SAT" : "Practice Test";
+  return (
+    <div style={{ marginTop: 10, background: C.ink, color: "#fff", borderRadius: 10, padding: "10px 14px", fontSize: 12.5, lineHeight: 1.6, maxWidth: 320 }}>
+      <div style={{ fontWeight: 700 }}>{fmtFull(p.a.date)}</div>
+      <div>{typeLabel}{p.a.source ? ` · Source: ${p.a.source}` : ""}</div>
+      <div>Reading and Writing: {p.a.rw}</div>
+      <div>Math: {p.a.math}</div>
+      <div>Total: {totalOf(p.a)}</div>
+      {change != null && <div>Change from previous {p.type === "SAT" ? "SAT" : "practice"}: {change >= 0 ? "+" : ""}{change}</div>}
+    </div>
+  );
+}
+
+// ---- 3. Section Progress ----
+function SectionProgressBlock({ sorted, testFilter, setTestFilter, target, secTargets }) {
+  const scope = sorted.filter((a) => testFilter === "all" || a.testType === testFilter);
+  const rw = sectionSummary(scope, "rw");
+  const math = sectionSummary(scope, "math");
+
+  return (
+    <div>
+      <FilterRow>
+        <FilterGroup label="Test" value={testFilter} setValue={setTestFilter} options={[["all", "All Tests"], ["Practice", "Practice"], ["SAT", "SAT"]]} />
+      </FilterRow>
+      {scope.length === 0 ? <Empty text="No records match this filter yet." /> : (
+        <>
+          <MiniDualChart scope={scope} secTargets={secTargets} />
+          <div className="sg-grid" style={{ marginTop: 14 }}>
+            <SectionSummaryCard title="Reading & Writing" data={rw} suggested={secTargets.rw} />
+            <SectionSummaryCard title="Math" data={math} suggested={secTargets.math} />
+          </div>
+          <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 8 }}>Suggested planning target: a transparent 50/50 split of your {target} SAT target — not an official requirement.</div>
+        </>
+      )}
+    </div>
+  );
+}
+function MiniDualChart({ scope, secTargets }) {
+  const W = 680, H = 200, padL = 40, padR = 14, padT = 16, padB = 28;
+  const yMin = 200, yMax = 800;
+  const xs = scope.map((a) => new Date(a.date).getTime());
+  const xMin = Math.min(...xs), xMax = Math.max(...xs), xSpan = xMax - xMin || 1;
+  const sx = (x) => padL + ((x - xMin) / xSpan) * (W - padL - padR);
+  const sy = (y) => padT + (1 - (y - yMin) / (yMax - yMin)) * (H - padT - padB);
+  const line = (field) => scope.map((a) => `${sx(new Date(a.date).getTime())},${sy(Number(a[field]))}`).join(" ");
+  const summary = `Section progress. Reading and Writing and Math trends across ${scope.length} tests.`;
+  return (
+    <div className="sg-nav-scroll" style={{ width: "100%" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ minWidth: 340, display: "block" }} role="img" aria-label={summary}>
+        {[200, 400, 600, 800].map((yv, i) => (
+          <g key={i}><line x1={padL} y1={sy(yv)} x2={W - padR} y2={sy(yv)} stroke={C.soft} /><text x={padL - 6} y={sy(yv) + 3} textAnchor="end" fontSize="9" fill={C.ink2}>{yv}</text></g>
+        ))}
+        <polyline points={line("rw")} fill="none" stroke={C.paid} strokeWidth="2" />
+        <polyline points={line("math")} fill="none" stroke={C.accent2} strokeWidth="2" />
+        {scope.map((a, i) => <circle key={"r" + i} cx={sx(new Date(a.date).getTime())} cy={sy(Number(a.rw))} r="3.5" fill={C.paid} />)}
+        {scope.map((a, i) => <rect key={"m" + i} x={sx(new Date(a.date).getTime()) - 3} y={sy(Number(a.math)) - 3} width="6" height="6" fill={C.accent2} />)}
+        {scope.map((a, i) => <text key={"x" + i} x={sx(new Date(a.date).getTime())} y={H - 8} textAnchor="middle" fontSize="9" fill={C.ink2}>{fmtAbbr(a.date)}</text>)}
+      </svg>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 6, fontSize: 12, color: C.ink2 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, background: C.paid, borderRadius: "50%" }} /> Reading & Writing</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 10, height: 10, background: C.accent2 }} /> Math</span>
+      </div>
+    </div>
+  );
+}
+function SectionSummaryCard({ title, data, suggested }) {
+  if (!data) return null;
+  const dist = suggested - data.latest;
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>
+      <div style={{ fontWeight: 700, marginBottom: 8 }}>{title}</div>
+      <Row k="Latest" v={data.latest} />
+      <Row k="Best" v={data.best} />
+      <Row k="Avg of last 3 practice" v={data.lastThreeAvg ?? "—"} />
+      <Row k="Change (last 3 comparable)" v={data.changeLastThree == null ? "—" : `${data.changeLastThree >= 0 ? "+" : ""}${data.changeLastThree}`} />
+      <Row k="Distance from suggested target" v={dist <= 0 ? "At/above target" : `${dist} pts`} />
+    </div>
+  );
+}
+function Row({ k, v }) {
+  return <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "3px 0", gap: 10 }}><span style={{ color: C.ink2 }}>{k}</span><b style={{ overflowWrap: "anywhere" }}>{v}</b></div>;
+}
+
+// ---- 4. What the Data Says ----
+function InsightsBlock({ sorted, satsAsc, pracAsc, superscore, target, practiceLast3Avg, secTargets }) {
+  const insights = [];
+  if (pracAsc.length < 2 && satsAsc.length < 2) {
+    insights.push("Add at least two practice tests to see a meaningful trend.");
+  } else {
+    const latestSat = satsAsc[satsAsc.length - 1];
+    const latestPrac = pracAsc[pracAsc.length - 1];
+    if (latestSat && superscore) insights.push(`Your latest official SAT is ${totalOf(latestSat)} and your superscore is ${superscore.total}.`);
+    if (practiceLast3Avg != null) {
+      const parts = [`Your last three practice tests average ${practiceLast3Avg}`];
+      if (superscore) parts.push(`${Math.abs(superscore.total - practiceLast3Avg)} points ${practiceLast3Avg < superscore.total ? "below" : "above"} your superscore`);
+      parts.push(`${Math.abs(target - practiceLast3Avg)} points ${practiceLast3Avg < target ? "below" : "above"} your ${target} target`);
+      insights.push(parts.join(", ") + ".");
+    }
+    // strongest / weakest section using latest record sections vs suggested
+    const latest = sorted[sorted.length - 1];
+    if (latest) {
+      const rwGap = secTargets.rw - Number(latest.rw);
+      const mathGap = secTargets.math - Number(latest.math);
+      const stronger = rwGap < mathGap ? "Reading and Writing" : "Math";
+      const weaker = rwGap < mathGap ? "Math" : "Reading and Writing";
+      insights.push(`${stronger} is currently your stronger section. ${weaker} shows the largest gap to target and is your biggest opportunity.`);
+    }
+    // improvement first->latest practice
+    if (pracAsc.length >= 2) {
+      const d = totalOf(pracAsc[pracAsc.length - 1]) - totalOf(pracAsc[0]);
+      insights.push(`Across your practice tests, your total has ${d >= 0 ? "improved" : "declined"} by ${Math.abs(d)} points from first to latest.`);
+    }
+  }
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 4 }}>
+      <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7, fontSize: 14 }}>
+        {insights.map((t, i) => <li key={i} style={{ overflowWrap: "anywhere" }}>{t}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+// ---- 5. Practice Consistency ----
+function ConsistencyBlock({ sorted }) {
+  const c = practiceConsistency(sorted);
+  if (c.count < 3) {
+    return <EmptyState title="Add at least three practice tests to assess consistency." sub={c.count ? `You have ${c.count} so far.` : undefined} />;
+  }
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 4 }}>
+      <div className="sg-grid">
+        <div><Row k="Last 3 practice average" v={c.average} /><Row k="Best recent" v={c.best} /><Row k="Lowest recent" v={c.low} /><Row k="Score range" v={`${c.range} pts`} /></div>
+        <div>
+          <div style={{ fontSize: 13, color: C.ink2 }}>Consistency</div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 22, color: c.status === "Consistent" ? C.accent : c.status === "Variable" ? "#B4443A" : C.accent2 }}>{c.status}</div>
+          <div style={{ fontSize: 13, color: C.ink2, marginTop: 6, lineHeight: 1.5 }}>Your recent practice scores vary by {c.range} points. More timed full-length testing may help determine whether the variation is caused by pacing, content gaps, or testing conditions.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- 6. Where Points Are Leaking ----
+function LeakingBlock({ categories, setTab }) {
+  if (categories.length === 0) {
+    return <EmptyState title="No mistake patterns are available yet. Add mistakes after your next test to receive targeted insights." button="Review Mistake Log" onClick={() => setTab("mistakes")} />;
+  }
+  return (
+    <>
+      <div style={{ display: "grid", gap: 10 }}>
+        {categories.map((c) => (
+          <div key={c.skill} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>{c.skill}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {c.sources.map((s) => <Tag key={s} c={s === "SAT" ? C.accent : C.paid}>{s}</Tag>)}
+                {c.section && <Tag c={C.ink2}>{c.section}</Tag>}
+              </div>
+            </div>
+            <div style={{ fontSize: 13, color: C.ink2, marginTop: 6, lineHeight: 1.6 }}>
+              {c.total} mistake{c.total === 1 ? "" : "s"} · {c.unresolved} unresolved · seen across {c.testsSeen} test{c.testsSeen === 1 ? "" : "s"} · last recorded {c.last ? fmtFull(c.last) : "—"}
+            </div>
+            <div style={{ fontSize: 13, color: C.ink, marginTop: 6 }}>
+              <b>Next action:</b> Complete 15 timed {c.skill} questions and review every incorrect answer before your next practice test.
+            </div>
+          </div>
+        ))}
+      </div>
+      <button onClick={() => setTab("mistakes")} style={btnGhostSolid}>Review Mistake Log</button>
+    </>
+  );
+}
+
+// ---- 7. SAT Readiness ----
+function ReadinessBlock({ readiness, superscore, latestSat, practiceLast3Avg, target, daysToSat }) {
+  const [showHow, setShowHow] = useState(false);
+  const color = { "At Target": C.accent, "Above Target": C.accent, "Approaching Target": C.accent2, "Improving": C.accent2, "Building Foundation": "#B4443A", "Insufficient Data": C.ink2 }[readiness.status] || C.ink2;
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 4 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 12, color: C.ink2 }}>Status</div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 24, color }}>{readiness.status}</div>
+        </div>
+        <button onClick={() => setShowHow((s) => !s)} className="sg-focus" style={{ ...btnGhost, color: C.accent }}>How readiness is calculated {showHow ? "▲" : "▼"}</button>
+      </div>
+      <div className="sg-grid" style={{ marginTop: 10 }}>
+        <div>
+          <Row k="Latest official SAT" v={latestSat ? totalOf(latestSat) : "—"} />
+          <Row k="Superscore" v={superscore ? superscore.total : "—"} />
+          <Row k="Last 3 practice avg" v={practiceLast3Avg ?? "—"} />
+        </div>
+        <div>
+          <Row k="SAT target" v={target} />
+          <Row k="Gap to target" v={readiness.gap == null ? "—" : readiness.gap <= 0 ? "Target reached" : `${readiness.gap} pts`} />
+          <Row k="Days to next SAT" v={daysToSat == null ? "Not scheduled" : daysToSat > 0 ? daysToSat : "—"} />
+        </div>
+      </div>
+      {showHow && (
+        <div style={{ marginTop: 12, fontSize: 12.5, color: C.ink2, lineHeight: 1.6, background: C.soft, borderRadius: 10, padding: 14 }}>
+          Readiness compares your best applicable score (superscore if you have two official SATs, otherwise your latest official SAT, otherwise your recent practice average) against your target. Thresholds: at or above target → At/Above Target; within 30 points → Approaching Target; within 90 points → Improving; more than 90 points → Building Foundation. Fewer than two data points → Insufficient Data. This is a description of where you stand today, not a prediction of your next official score.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- 8. Recommended Next Steps ----
+function NextStepsBlock({ categories, sorted, secTargets, latestSat, pracAsc, goal, setTab }) {
+  const steps = [];
+  const topUnresolved = categories.find((c) => c.unresolved > 0);
+  if (topUnresolved) steps.push({ text: `Review the ${topUnresolved.unresolved} unresolved ${topUnresolved.skill} mistake${topUnresolved.unresolved === 1 ? "" : "s"}.`, btn: ["Review Mistakes", () => setTab("mistakes")] });
+
+  const latest = sorted[sorted.length - 1];
+  if (latest) {
+    const rwGap = secTargets.rw - Number(latest.rw), mathGap = secTargets.math - Number(latest.math);
+    const weaker = rwGap >= mathGap ? "Reading & Writing" : "Math";
+    if (Math.max(rwGap, mathGap) > 0) steps.push({ text: `Complete one timed ${weaker} module to close your largest section gap.`, btn: ["Open Practice Plan", () => setTab("planner")] });
+  }
+  if (goal.nextPracticeDate) steps.push({ text: `Take your scheduled full practice test on ${fmtFull(goal.nextPracticeDate)}.`, btn: ["Add Test Result", () => setTab("tracker")] });
+  else if (pracAsc.length === 0) steps.push({ text: "Take a full-length Bluebook practice test to establish a baseline.", btn: ["Add Test Result", () => setTab("tracker")] });
+  else steps.push({ text: "Schedule your next practice test to keep momentum.", btn: ["Open Practice Plan", () => setTab("planner")] });
+
+  const shown = steps.slice(0, 3);
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      {shown.map((s, i) => (
+        <div key={i} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ fontSize: 14, overflowWrap: "anywhere" }}><b style={{ color: C.accent }}>{i + 1}.</b> {s.text}</div>
+          {s.btn && <button onClick={s.btn[1]} style={{ ...btnGhostSolid, marginTop: 0 }}>{s.btn[0]}</button>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---- 9. Test History ----
+function TestHistoryBlock({ valid }) {
+  const [filter, setFilter] = useState("all");
+  const rows = [...valid].filter((a) => filter === "all" || a.testType === filter).sort((a, b) => new Date(b.date) - new Date(a.date));
+  const asc = [...valid].sort(byDateAsc);
+  return (
+    <div>
+      <FilterRow>
+        <FilterGroup label="Type" value={filter} setValue={setFilter} options={[["all", "All"], ["SAT", "SAT"], ["Practice", "Practice"]]} />
+      </FilterRow>
+      {rows.length === 0 ? <Empty text="No records match this filter." /> : (
+        <div style={{ display: "grid", gap: 10 }}>
+          {rows.map((a) => {
+            const change = changeVsPrevSameType(asc, a);
+            return (
+              <div key={a.id} style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 12, padding: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+                  <div style={{ fontWeight: 700 }}>{fmtFull(a.date)}</div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <Tag c={a.testType === "SAT" ? C.accent : C.paid}>{a.testType === "SAT" ? "Official SAT" : "Practice"}</Tag>
+                    {a.source && <Tag c={C.ink2}>{a.source}</Tag>}
+                  </div>
+                </div>
+                <div style={{ fontSize: 13, color: C.ink2, marginTop: 6 }}>
+                  R&W {a.rw} · Math {a.math} · <b style={{ color: C.ink }}>Total {totalOf(a)}</b>
+                  {change != null && <> · Change {change >= 0 ? "+" : ""}{change}</>}
+                </div>
+                {a.notes && <div style={{ fontSize: 13, marginTop: 4 }}>“{a.notes}”</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // ---------- 5. AI PLANNER ----------
 // ---------- 5. AI PLANNER (SAT + Practice tabs, saved history) ----------
