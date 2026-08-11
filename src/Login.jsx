@@ -93,19 +93,60 @@ export default function Login({ onTryDemo }) {
   return (
     <div style={{ minHeight: "100vh", background: C.paper, fontFamily: FONT_BODY, color: C.ink, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Inter:wght@400;500;600;700&display=swap');`}</style>
-      <div style={{ width: "100%", maxWidth: 400 }}>
-        <div style={{ textAlign: "center", marginBottom: 24 }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 34, letterSpacing: -0.5 }}>
+      <div style={{ width: "100%", maxWidth: 420 }}>
+        <div style={{ textAlign: "center", marginBottom: 20 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: "#fff", background: C.accent, padding: "4px 10px", borderRadius: 20, marginBottom: 10 }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 2l2.2 6.6L21 11l-6.8 2.4L12 20l-2.2-6.6L3 11l6.8-2.4L12 2z" fill="#fff" />
+            </svg>
+            Agent
+          </div>
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 36, letterSpacing: -0.5 }}>
             SATGene
           </div>
-          <div style={{ fontSize: 14, color: C.ink2, marginTop: 6 }}>
-            Sign in to save your practice tests and track your progress.
+          <div style={{ fontSize: 13, color: C.accent, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, marginTop: 4 }}>
+            Adaptive SAT Preparation Agent
           </div>
+          <div style={{ fontSize: 14, color: C.ink2, marginTop: 10, lineHeight: 1.5, maxWidth: 360, marginInline: "auto" }}>
+            It learns from your scores, practice, and mistakes, decides what you should work on next, and guides you through it — automatically, as you improve.
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: 6, marginBottom: 20 }} aria-label="How SATGene works">
+          {["Results", "Diagnose", "Practice", "Adapt"].map((step, i, arr) => (
+            <React.Fragment key={step}>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink2, background: C.soft, border: `1px solid ${C.line}`, borderRadius: 20, padding: "5px 11px" }}>
+                {step}
+              </span>
+              {i < arr.length - 1 && <span aria-hidden="true" style={{ color: C.ink2, fontSize: 12 }}>→</span>}
+            </React.Fragment>
+          ))}
+        </div>
+
+        {onTryDemo && (
+          <div style={{ background: C.card, border: `1px solid ${C.accent}`, borderRadius: 16, padding: 20, marginBottom: 16, textAlign: "center" }}>
+            <button
+              onClick={onTryDemo}
+              className="sg-focus"
+              style={{ width: "100%", background: C.accent, border: "none", borderRadius: 10, padding: "13px 18px", fontSize: 15, fontWeight: 700, color: "#fff", cursor: "pointer" }}
+            >
+              Try Demo Student — see the agent in action
+            </button>
+            <div style={{ fontSize: 12, color: C.ink2, marginTop: 8, lineHeight: 1.4 }}>
+              No account needed. Sample data only — nothing here is ever saved.
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "18px 0", color: C.ink2, fontSize: 12 }}>
+          <div style={{ flex: 1, height: 1, background: C.line }} />
+          or sign in to save your own progress
+          <div style={{ flex: 1, height: 1, background: C.line }} />
         </div>
 
         {!firebaseReady && (
           <div style={{ ...msg, marginTop: 0, marginBottom: 16, background: "#FFF8EC", color: "#8A5A0E", border: "1px solid #E9CFA0" }}>
-            Sign-in isn't configured in this environment (missing Firebase setup), so accounts aren't available right now. You can still explore everything with Demo Student below.
+            Sign-in isn't configured in this environment (missing Firebase setup), so accounts aren't available right now. You can still explore everything with Demo Student above.
           </div>
         )}
 
@@ -144,20 +185,6 @@ export default function Login({ onTryDemo }) {
         <div style={{ textAlign: "center", fontSize: 12, color: C.ink2, marginTop: 16, lineHeight: 1.5 }}>
           Your data is tied to your account and synced across devices.
         </div>
-
-        {onTryDemo && (
-          <div style={{ textAlign: "center", marginTop: 18 }}>
-            <button
-              onClick={onTryDemo}
-              style={{ background: "none", border: `1px dashed ${C.line}`, borderRadius: 10, padding: "10px 18px", fontSize: 13.5, fontWeight: 600, color: C.ink2, cursor: "pointer" }}
-            >
-              Try Demo Student — explore with sample data, no account needed
-            </button>
-            <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 6 }}>
-              Demo data is local only and is never saved to an account.
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
