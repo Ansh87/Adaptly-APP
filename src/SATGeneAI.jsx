@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import Login from "./Login.jsx";
+import logo from "./assets/satgene-logo.png";
 import { watchAuth, logout, loadUserData, saveUserData, deleteAccount, reauthenticate } from "./firebase";
 import {
   blankMastery,
@@ -33,7 +34,7 @@ import { pickQuestion, DIFFICULTIES } from "./questionBank.js";
 const PROVIDERS = [
   {
     id: "bluebook",
-    name: "College Board — Bluebook",
+    name: "College Board: Bluebook",
     tier: "official",
     cost: "Free",
     tests: "6+ full-length adaptive",
@@ -44,7 +45,7 @@ const PROVIDERS = [
   },
   {
     id: "mypractice",
-    name: "College Board — My Practice",
+    name: "College Board: My Practice",
     tier: "official",
     cost: "Free",
     tests: "Score reports + Tailored Practice",
@@ -66,12 +67,12 @@ const PROVIDERS = [
   },
   {
     id: "khan",
-    name: "Khan Academy — Official SAT Prep",
+    name: "Khan Academy: Official SAT Prep",
     tier: "official",
     cost: "Free",
     tests: "Lessons + per-question walkthroughs",
     realism: 90,
-    note: "Built with College Board. NOTE: Khan no longer hosts full-length tests — those moved to Bluebook. Khan now gives lessons, hints, and a walkthrough of every question on your Bluebook test.",
+    note: "Built with College Board. NOTE: Khan no longer hosts full-length tests. Those moved to Bluebook. Khan now gives lessons, hints, and a walkthrough of every question on your Bluebook test.",
     url: "https://www.khanacademy.org/digital-sat",
     best: "Learning the concept behind a missed question.",
   },
@@ -147,11 +148,11 @@ const PROVIDERS = [
 const SAT_STRUCTURE = {
   totalMinutes: 134,
   modules: [
-    { name: "Reading & Writing — Module 1", q: 27, min: 32, adaptive: "medium" },
-    { name: "Reading & Writing — Module 2", q: 27, min: 32, adaptive: "adaptive" },
+    { name: "Reading & Writing Module 1", q: 27, min: 32, adaptive: "medium" },
+    { name: "Reading & Writing Module 2", q: 27, min: 32, adaptive: "adaptive" },
     { name: "Break", q: 0, min: 10, adaptive: "break" },
-    { name: "Math — Module 1", q: 22, min: 35, adaptive: "medium" },
-    { name: "Math — Module 2", q: 22, min: 35, adaptive: "adaptive" },
+    { name: "Math Module 1", q: 22, min: 35, adaptive: "medium" },
+    { name: "Math Module 2", q: 22, min: 35, adaptive: "adaptive" },
   ],
 };
 
@@ -334,7 +335,7 @@ function buildPlanChangeExplanation({ prevSnapshot, agentAction }) {
   const nowTop = agentAction && agentAction.kind === "practice" ? agentAction.skill : null;
   if (!nowTop) return null;
   if (nowTop === prevSnapshot.topSkill) {
-    return { changed: false, text: `Still ${nowTop} — ${agentAction.reason}` };
+    return { changed: false, text: `Still ${nowTop}. ${agentAction.reason}` };
   }
   return {
     changed: true,
@@ -482,7 +483,7 @@ export default function SATGeneAI() {
     return (
       <div style={{ minHeight: "100vh", background: C.paper, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: FONT_BODY, color: C.ink2 }}>
         <div style={{ textAlign: "center" }}>
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 30 }}>SATGene</div>
+          <img src={logo} alt="SATGene" style={{ height: 40, width: "auto" }} />
           <div style={{ marginTop: 10, fontSize: 14 }}>Loading…</div>
         </div>
       </div>
@@ -807,7 +808,7 @@ function AppShell({ user, demo = false, onExitDemo }) {
 function DemoBanner({ onExitDemo }) {
   return (
     <div style={{ background: C.ink, color: "#fff", textAlign: "center", padding: "9px 16px", fontSize: 13, fontWeight: 600, display: "flex", justifyContent: "center", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-      <span>Demo Student Mode — you're viewing sample data. Nothing here is saved to a real account.</span>
+      <span>Demo Student Mode: you're viewing sample data. Nothing here is saved to a real account.</span>
       <button onClick={onExitDemo} className="sg-focus" style={{ background: "rgba(255,255,255,.14)", border: "1px solid rgba(255,255,255,.3)", color: "#fff", borderRadius: 8, padding: "4px 12px", fontSize: 12.5, fontWeight: 700 }}>
         Exit demo
       </button>
@@ -854,7 +855,7 @@ function Header({ goal, attempts, user, syncState, displayName, setTab, demo, on
 
         /* Main header row: logo left, scores right, tight vertical spacing */
         .sg-header-main { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding-top: 6px; padding-bottom: 12px; }
-        .sg-logo { font-size: 28px; }
+        .sg-logo { height: 32px; width: auto; max-width: 100%; }
         .sg-tagline { font-size: 13px; color: ${C.ink2}; margin-top: 3px; }
 
         /* Content-sized score cards via flexible auto-fit grid */
@@ -871,7 +872,7 @@ function Header({ goal, attempts, user, syncState, displayName, setTab, demo, on
         }
         @media (max-width: 640px) {
           .sg-header-main { align-items: center; padding-bottom: 12px; }
-          .sg-logo { font-size: 24px; }
+          .sg-logo { height: 26px; }
           .sg-tagline { display: none; }
           .sg-scores { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .sg-super-card { grid-column: 1 / -1; }
@@ -891,11 +892,9 @@ function Header({ goal, attempts, user, syncState, displayName, setTab, demo, on
 
       <div className="sg-container sg-header-main">
         <div className="sg-min0">
-          <div className="sg-logo" style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, letterSpacing: -0.5, lineHeight: 1 }}>
-            SATGene
-          </div>
+          <img src={logo} alt="SATGene" className="sg-logo" style={{ display: "block" }} />
           <div className="sg-tagline">
-            Adaptive SAT Preparation Agent
+            Track. Adapt. Score.
           </div>
         </div>
         <div className="sg-scores">
@@ -936,7 +935,7 @@ function SuperscoreStat({ superscore, fmtShort }) {
 
 // Transient save status: shows Saving…, then ✓ Saved which auto-hides after ~2.5s.
 // In Demo Student mode the save pipeline never runs (see AppShell's save effect),
-// so this shows a permanent, unambiguous "Demo — not saved" label instead.
+// so this shows a permanent, unambiguous "Demo (not saved)" label instead.
 function SaveStatus({ syncState, demo }) {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -951,7 +950,7 @@ function SaveStatus({ syncState, demo }) {
   if (demo) {
     return (
       <span aria-live="polite" style={{ display: "inline-flex", alignItems: "center", gap: 5, color: C.accent2, fontWeight: 600, fontSize: 12 }}>
-        Demo — not saved
+        Demo (not saved)
       </span>
     );
   }
@@ -1196,7 +1195,7 @@ function AgentDashboard({ mastery, priorities, agentAction, mission, missionComp
         SATGene Agent
       </h2>
       <p style={{ color: C.ink2, fontSize: 14, margin: "6px 0 20px", maxWidth: 640 }}>
-        Your adaptive SAT coach. It reads your real My Results data — no guessing — and tells you exactly what to work on next.
+        Your adaptive SAT coach. It reads your real My Results data, no guessing, and tells you exactly what to work on next.
       </p>
 
       {!hasEvidence ? (
@@ -1340,11 +1339,11 @@ function DiagnosticFallback({ setTab }) {
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 24 }}>
       <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 18, marginBottom: 8 }}>
-        Not enough data yet — let's run a quick diagnostic
+        Not enough data yet: let's run a quick diagnostic
       </div>
       <p style={{ color: C.ink2, fontSize: 14, lineHeight: 1.6, margin: "0 0 16px", maxWidth: 560 }}>
         The agent builds your mastery map from real results: a logged test score or a few entries in the Mistake Log.
-        Add either one and SATGene will name your #1 priority skill with a data-grounded reason — no guessing, no fake numbers.
+        Add either one and SATGene will name your #1 priority skill with a data-grounded reason, no guessing, no fake numbers.
       </p>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <button onClick={() => setTab("tracker")} style={btnPrimary}>Log a test score</button>
@@ -1434,7 +1433,7 @@ function MissionCard({ mission, missionCompleted, onToggle, setTab, onStartPract
         <span style={{ fontSize: 12.5, color: C.ink2, fontWeight: 600 }}>{done}/{total} done</span>
       </div>
       {items.length === 0 ? (
-        <p style={{ fontSize: 13.5, color: C.ink2, marginTop: 10 }}>Nothing queued right now — log more results to unlock a full mission.</p>
+        <p style={{ fontSize: 13.5, color: C.ink2, marginTop: 10 }}>Nothing queued right now. Log more results to unlock a full mission.</p>
       ) : (
         <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
           {items.map((it) => {
@@ -1562,7 +1561,7 @@ function ProviderCard({ p }) {
         rel="noopener noreferrer"
         style={{ marginTop: "auto", textAlign: "center", textDecoration: "none", background: tierColor, color: "#fff", padding: "10px", borderRadius: 10, fontSize: 14, fontWeight: 600 }}
       >
-        Open {p.name.split("—")[0].trim()} →
+        Open {p.name.split(":")[0].trim()} →
       </a>
     </div>
   );
@@ -1572,7 +1571,7 @@ function ProviderCard({ p }) {
 function ResultsPage({ resultsTab, setResultsTab, attempts, setAttempts, mistakes, setMistakes }) {
   return (
     <>
-      <SectionTitle kicker="Your evidence" title="My Results" sub="SAT scores, practice scores, and mistakes — the evidence SATGene uses to understand your progress and decide what to work on next." />
+      <SectionTitle kicker="Your evidence" title="My Results" sub="SAT scores, practice scores, and mistakes: the evidence SATGene uses to understand your progress and decide what to work on next." />
       <div style={{ display: "inline-flex", background: C.soft, borderRadius: 12, padding: 4, marginBottom: 22, flexWrap: "wrap" }} role="group" aria-label="My Results section">
         {[["scores", "Test Scores"], ["mistakes", "Mistakes"]].map(([id, label]) => (
           <button
@@ -1808,7 +1807,7 @@ function Mistakes({ mistakes, setMistakes, attempts }) {
 
   return (
     <>
-      <p style={{ color: C.ink2, fontSize: 14, margin: "0 0 18px", maxWidth: 640 }}>Record why you missed each question — not the copyrighted question itself, just the skill and the lesson. Tag each as SAT or Practice so SATGene can weigh them correctly.</p>
+      <p style={{ color: C.ink2, fontSize: 14, margin: "0 0 18px", maxWidth: 640 }}>Record why you missed each question, not the copyrighted question itself, just the skill and the lesson. Tag each as SAT or Practice so SATGene can weigh them correctly.</p>
 
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
         {/* Test Type selector */}
@@ -2042,7 +2041,7 @@ function Progress({ attempts, mistakes, goal, setTab, mastery, priorities }) {
 
   return (
     <>
-      <SectionTitle kicker="Am I improving?" title="Progress" sub="Your My Results data turned into clear, actionable insights. All calculations are deterministic — no AI." />
+      <SectionTitle kicker="Am I improving?" title="Progress" sub="Your My Results data turned into clear, actionable insights. All calculations are deterministic, no AI." />
 
       {invalid.length > 0 && (
         <div style={{ background: "#FBEAE8", border: "1px solid #E3B7B3", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -2305,7 +2304,7 @@ function SectionProgressBlock({ sorted, testFilter, setTestFilter, target, secTa
             <SectionSummaryCard title="Reading & Writing" data={rw} suggested={secTargets.rw} />
             <SectionSummaryCard title="Math" data={math} suggested={secTargets.math} />
           </div>
-          <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 8 }}>Suggested planning target: a transparent 50/50 split of your {target} SAT target — not an official requirement.</div>
+          <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 8 }}>Suggested planning target: a transparent 50/50 split of your {target} SAT target, not an official requirement.</div>
         </>
       )}
     </div>
@@ -2668,7 +2667,7 @@ function PlanPanel({ kind, latest, supportingLatest, target, onTarget, nextDate,
       weak[0] ? `Two focused sessions on ${weak[0]} (your most-missed skill).` : "Complete one full-length test to establish a baseline.",
       weak[1] ? `One session on ${weak[1]}.` : `Review ${weakestSection} fundamentals.`,
       "One timed module to build pacing.",
-      timeIssues >= 2 ? "Pacing drill — you've run out of time repeatedly." : "Revisit unmastered items in your Mistake Log.",
+      timeIssues >= 2 ? "Pacing drill: you've run out of time repeatedly." : "Revisit unmastered items in your Mistake Log.",
     ];
     const nextAction = latestScore == null
       ? (isSAT ? "Add your official SAT score in Test Tracker once you have it." : "Take a Bluebook practice test, then log it in Test Tracker.")
@@ -2840,7 +2839,7 @@ function SavedPlans({ plans, filterKind, openPlanId, setOpenPlanId, onDelete }) 
     return (
       <div style={{ marginTop: 8 }}>
         <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8, fontFamily: FONT_DISPLAY }}>Current plan</div>
-        <Empty text={`No ${filterKind} plans yet. Generate one above — every plan is saved here.`} />
+        <Empty text={`No ${filterKind} plans yet. Generate one above, every plan is saved here.`} />
       </div>
     );
   }
@@ -2876,7 +2875,7 @@ function SavedPlans({ plans, filterKind, openPlanId, setOpenPlanId, onDelete }) 
       <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10, fontFamily: FONT_DISPLAY }}>Current plan</div>
       <div style={{ fontSize: 13, color: C.ink2, marginBottom: 10 }}>
         {current.genType} Plan · {fmtDateShort(current.createdAt)}
-        {current.currentScore != null && current.targetScore != null ? ` — Current ${current.currentScore} → Target ${current.targetScore}` : ""}
+        {current.currentScore != null && current.targetScore != null ? ` · Current ${current.currentScore} → Target ${current.targetScore}` : ""}
       </div>
       <div style={{ display: "grid", gap: 10 }}>
         {renderPlan(current, 0, true)}
@@ -2956,7 +2955,7 @@ function ResourcesPanel() {
   return (
     <>
       <p style={{ color: C.ink2, fontSize: 14, margin: "0 0 16px", maxWidth: 640 }}>
-        Official practice is free and the most realistic — do it first. Paid vendors add extra question volume once you've exhausted the official pool. Each card opens the provider directly; SATGene never copies their questions.
+        Official practice is free and the most realistic, so do it first. Paid vendors add extra question volume once you've exhausted the official pool. Each card opens the provider directly; SATGene never copies their questions.
       </p>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
@@ -2988,7 +2987,7 @@ function ResourcesPanel() {
       <div style={{ marginTop: 28, background: C.soft, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
         <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6, fontFamily: FONT_DISPLAY }}>The recommended path</div>
         <ol style={{ margin: 0, paddingLeft: 20, fontSize: 14, color: C.ink2, lineHeight: 1.7 }}>
-          <li>Download <b>Bluebook</b> and take a full-length test — it's the real test-day engine.</li>
+          <li>Download <b>Bluebook</b> and take a full-length test: it's the real test-day engine.</li>
           <li>Open <b>My Practice</b> to see your score, then <b>Tailored Practice</b> for auto-targeted questions.</li>
           <li>Use <b>Khan Academy</b> to learn the concept behind each missed question.</li>
           <li>Drill weak skills in the <b>Student Question Bank</b>.</li>
@@ -3037,7 +3036,7 @@ function FullSimulation() {
             <b>Adaptive logic:</b> Module 1 runs at medium difficulty. Score high → Module 2 gets harder (unlocks the top score band). Score low → Module 2 gets easier. This mirrors the official section-adaptive design and is labeled as a simulation, not an official scoring engine.
           </div>
           <button onClick={() => { setRunning(true); setModIdx(0); setSeconds(0); }} style={btnPrimary}>Start timed simulation</button>
-          <p style={{ fontSize: 12, color: C.ink2, marginTop: 14 }}>This is a prototype simulation of the digital SAT's structure and pacing only — it is not official College Board scoring and never reuses copied questions. For scored practice with real questions, use Adaptive Practice.</p>
+          <p style={{ fontSize: 12, color: C.ink2, marginTop: 14 }}>This is a prototype simulation of the digital SAT's structure and pacing only. It is not official College Board scoring and never reuses copied questions. For scored practice with real questions, use Adaptive Practice.</p>
         </div>
       ) : (
         <div style={{ background: C.ink, color: "#fff", borderRadius: 16, padding: 30, textAlign: "center" }}>
@@ -3173,7 +3172,7 @@ function PracticePicker({ onStart, agentAction }) {
         Start practice set →
       </button>
       <p style={{ fontSize: 12, color: C.ink2, marginTop: 14 }}>
-        Every question is original — written by SATGene, never copied from College Board or any vendor. Difficulty adapts as you answer.
+        Every question is original, written by SATGene, never copied from College Board or any vendor. Difficulty adapts as you answer.
       </p>
     </div>
   );
@@ -3335,14 +3334,14 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart }) 
       {session.revealed && (
         <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 16, marginBottom: 16 }}>
           <div aria-live="polite" style={{ fontWeight: 700, color: isCorrect ? C.accent : "#B4443A", marginBottom: 8, fontSize: 14.5 }}>
-            {isCorrect ? "✓ Correct" : `✗ Not quite — the correct answer is ${String.fromCharCode(65 + q.correctIndex)}`}
+            {isCorrect ? "✓ Correct" : `✗ Not quite. The correct answer is ${String.fromCharCode(65 + q.correctIndex)}`}
           </div>
           <div style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.6 }}>
             {session.tutor.text || q.explanation}
           </div>
           {session.tutor.source === "local" && session.tutor.error && (
             <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 8, fontStyle: "italic" }}>
-              Showing the instant explanation — the AI tutor is unavailable right now.
+              Showing the instant explanation. The AI tutor is unavailable right now.
             </div>
           )}
         </div>
@@ -3395,7 +3394,7 @@ function MorePage({ user, displayName, syncState, profile, setProfile, goal, set
     ["about", "About SATGene"],
   ];
 
-  const saveText = demo ? "Demo — not saved" : syncState === "saving" ? "Saving…" : syncState === "error" ? "Save failed" : "Saved to your account";
+  const saveText = demo ? "Demo (not saved)" : syncState === "saving" ? "Saving…" : syncState === "error" ? "Save failed" : "Saved to your account";
 
   return (
     <>
@@ -3500,7 +3499,7 @@ function SettingsPanel({ goal, setGoal, syncState }) {
       <PanelCard>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Data-saving status</div>
         <div style={{ fontSize: 13.5, color: C.ink2 }}>
-          {syncState === "saving" ? "Saving your latest changes…" : syncState === "error" ? "Last save failed — check your connection." : "Your data is saved to your account and syncs across devices."}
+          {syncState === "saving" ? "Saving your latest changes…" : syncState === "error" ? "Last save failed. Check your connection." : "Your data is saved to your account and syncs across devices."}
         </div>
       </PanelCard>
     </>
@@ -3585,7 +3584,7 @@ function DataPrivacyPanel({ profile, goal, attempts, mistakes, plans, setGoal, s
         <PanelCard style={{ background: "#FFF8EC", borderColor: "#E9CFA0" }}>
           <div style={{ fontWeight: 700, marginBottom: 6, color: C.accent2 }}>You're in Demo Student mode</div>
           <p style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.55, margin: "0 0 12px" }}>
-            Everything below operates on the sample data in this browser tab only — nothing is tied to a real account, and none of it is ever sent to Firestore. Exit the demo to sign in for real.
+            Everything below operates on the sample data in this browser tab only. Nothing is tied to a real account, and none of it is ever sent to Firestore. Exit the demo to sign in for real.
           </p>
           <button onClick={onExitDemo} style={btnGhostSolid}>Exit demo</button>
         </PanelCard>
@@ -3668,10 +3667,10 @@ function DataPrivacyPanel({ profile, goal, attempts, mistakes, plans, setGoal, s
 // ---- Help & User Guide panel ----
 function HelpPanel() {
   const guide = [
-    ["Home", "SATGene analyzes your saved results and recommends what you should work on next — Next Best Action, Today's Mission, SATGene Noticed, a mastery snapshot, and your active study plan."],
+    ["Home", "SATGene analyzes your saved results and recommends what you should work on next: Next Best Action, Today's Mission, SATGene Noticed, a mastery snapshot, and your active study plan."],
     ["My Results", "Record official SAT scores, practice-test scores, and mistakes under Test Scores and Mistakes. These become the evidence SATGene uses to understand your progress. Official SAT records can contribute to your superscore; practice-test scores never do."],
     ["Practice", "Complete SATGene-recommended adaptive practice, run a full-length timed SAT simulation, or open trusted official and vendor SAT resources."],
-    ["Progress", "See score trends, section trends, mastery, weak areas, SAT readiness, and recommended next steps — answers the question \"Am I improving?\""],
+    ["Progress", "See score trends, section trends, mastery, weak areas, SAT readiness, and recommended next steps. Answers the question \"Am I improving?\""],
     ["More", "Manage your profile, settings, data & privacy, help, and application information. The AI Planner is reached from Home → Active Study Plan → View Full Plan, or from Progress."],
   ];
   return (
@@ -3712,13 +3711,13 @@ function AboutPanel() {
       <PanelCard>
         <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Features</div>
         <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, color: C.ink2, lineHeight: 1.7 }}>
-          <li><b>SATGene Agent (Home)</b> — Next Best Action, Today's Mission, and SATGene Noticed, from your real data.</li>
-          <li><b>My Results</b> — log official and practice SAT scores and mistakes separately.</li>
-          <li><b>Practice</b> — agent-directed adaptive practice, a full-length simulation, and trusted SAT resources.</li>
-          <li><b>Progress</b> — score and section trends, mastery, weak areas, readiness, and next steps.</li>
-          <li><b>SAT Superscore</b> — best section scores across official SATs.</li>
-          <li><b>AI Study Planner</b> — agent-managed, with model-generated or Instant rule-based plans.</li>
-          <li><b>User-specific saved data</b> — isolated to your account.</li>
+          <li><b>SATGene Agent (Home):</b> Next Best Action, Today's Mission, and SATGene Noticed, from your real data.</li>
+          <li><b>My Results:</b> log official and practice SAT scores and mistakes separately.</li>
+          <li><b>Practice:</b> agent-directed adaptive practice, a full-length simulation, and trusted SAT resources.</li>
+          <li><b>Progress:</b> score and section trends, mastery, weak areas, readiness, and next steps.</li>
+          <li><b>SAT Superscore:</b> best section scores across official SATs.</li>
+          <li><b>AI Study Planner:</b> agent-managed, with model-generated or Instant rule-based plans.</li>
+          <li><b>User-specific saved data:</b> isolated to your account.</li>
         </ul>
         <p style={{ fontSize: 13, color: C.ink2, lineHeight: 1.6, marginTop: 12, marginBottom: 0 }}>
           <b>Score types:</b> an <b>official SAT score</b> comes from a real College Board SAT; a <b>practice-test

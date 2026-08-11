@@ -6,6 +6,7 @@ import {
   resetPassword,
   firebaseReady,
 } from "./firebase";
+import logo from "./assets/satgene-logo.png";
 
 // Shared look tokens (kept local so Login is self-contained)
 const C = {
@@ -95,20 +96,18 @@ export default function Login({ onTryDemo }) {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Inter:wght@400;500;600;700&display=swap');`}</style>
       <div style={{ width: "100%", maxWidth: 420 }}>
         <div style={{ textAlign: "center", marginBottom: 20 }}>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: "#fff", background: C.accent, padding: "4px 10px", borderRadius: 20, marginBottom: 10 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: "#fff", background: C.accent, padding: "4px 10px", borderRadius: 20, marginBottom: 14 }}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M12 2l2.2 6.6L21 11l-6.8 2.4L12 20l-2.2-6.6L3 11l6.8-2.4L12 2z" fill="#fff" />
             </svg>
             Agent
           </div>
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 36, letterSpacing: -0.5 }}>
-            SATGene
+          <img src={logo} alt="SATGene" style={{ height: 52, maxWidth: "100%" }} />
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 20, color: C.ink, marginTop: 12, letterSpacing: -0.2 }}>
+            Track. Adapt. Score.
           </div>
-          <div style={{ fontSize: 13, color: C.accent, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, marginTop: 4 }}>
-            Adaptive SAT Preparation Agent
-          </div>
-          <div style={{ fontSize: 14, color: C.ink2, marginTop: 10, lineHeight: 1.5, maxWidth: 360, marginInline: "auto" }}>
-            It learns from your scores, practice, and mistakes, decides what you should work on next, and guides you through it — automatically, as you improve.
+          <div style={{ fontSize: 14, color: C.ink2, marginTop: 8, lineHeight: 1.5, maxWidth: 360, marginInline: "auto" }}>
+            Every result becomes your next best action.
           </div>
         </div>
 
@@ -130,10 +129,10 @@ export default function Login({ onTryDemo }) {
               className="sg-focus"
               style={{ width: "100%", background: C.accent, border: "none", borderRadius: 10, padding: "13px 18px", fontSize: 15, fontWeight: 700, color: "#fff", cursor: "pointer" }}
             >
-              Try Demo Student — see the agent in action
+              Try Demo Student: see the agent in action
             </button>
             <div style={{ fontSize: 12, color: C.ink2, marginTop: 8, lineHeight: 1.4 }}>
-              No account needed. Sample data only — nothing here is ever saved.
+              No account needed. Sample data only, nothing here is ever saved.
             </div>
           </div>
         )}
