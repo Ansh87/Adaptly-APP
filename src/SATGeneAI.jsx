@@ -495,7 +495,33 @@ export default function SATGeneAI() {
 }
 
 function AppShell({ user, demo = false, onExitDemo }) {
-  const [tab, setTab] = useState("hub");
+  const [tab, setRawTab] = useState("hub");
+  // Sub-tabs for the two grouped nav areas (My Results, Practice). Kept as separate
+  // state so switching the primary tab never loses the student's place inside it.
+  const [resultsTab, setResultsTab] = useState("scores"); // scores | mistakes
+  const [practiceTab, setPracticeTab] = useState("adaptive"); // adaptive | full | resources
+  // Back-compat navigation shim: every existing call site in this file still calls
+  // setTab("tracker" | "mistakes" | "analytics" | "sim" | ...) — the pre-simplification
+  // tab ids. Rather than touch every one of those call sites (and risk missing one),
+  // this translates the old ids into the new 5-tab structure + the right sub-tab, so
+  // "Log a test score", "Review Mistake Log", "Add Test Result", etc. all still land
+  // in the correct place under My Results / Practice / Progress. New code can also
+  // call setTab("results"), setTab("practice"), setTab("progress"), setTab("planner")
+  // directly.
+  const setTab = (target) => {
+    switch (target) {
+      case "tracker":
+        setRawTab("results"); setResultsTab("scores"); break;
+      case "mistakes":
+        setRawTab("results"); setResultsTab("mistakes"); break;
+      case "analytics":
+        setRawTab("progress"); break;
+      case "sim":
+        setRawTab("practice"); setPracticeTab("adaptive"); break;
+      default:
+        setRawTab(target);
+    }
+  };
   const [profile, setProfile] = useState(demo ? DEMO_PROFILE : DEFAULT_PROFILE);
   const [goal, setGoal] = useState(demo ? DEMO_GOAL : DEFAULT_GOAL);
   const [attempts, setAttempts] = useState(demo ? DEMO_ATTEMPTS : DEFAULT_ATTEMPTS);
@@ -656,8 +682,10 @@ function AppShell({ user, demo = false, onExitDemo }) {
         a { color: ${C.accent}; }
         .sg-focus:focus-visible { outline: 2px solid ${C.accent}; outline-offset: 2px; border-radius: 6px; }
 
-        /* Responsive page container: replaces fixed 20px desktop padding on mobile */
-        .sg-container { width: 100%; max-width: 1080px; margin-inline: auto; padding-inline: 20px; }
+        /* Responsive page container: replaces fixed 20px desktop padding on mobile.
+           1200px keeps desktop balanced (cards/charts have room to breathe) without
+           stretching content edge-to-edge on large monitors. */
+        .sg-container { width: 100%; max-width: 1200px; margin-inline: auto; padding-inline: 20px; }
         /* Auto-fit card grids: min column basis shrinks on mobile so nothing overflows */
         .sg-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
         .sg-grid > * { min-width: 0; }
@@ -722,21 +750,33 @@ function AppShell({ user, demo = false, onExitDemo }) {
             onDismissNotices={dismissAgentNotices}
           />
         )}
-        {tab === "tracker" && <Tracker attempts={attempts} setAttempts={setAttempts} />}
-        {tab === "mistakes" && <Mistakes mistakes={mistakes} setMistakes={setMistakes} attempts={attempts} />}
-        {tab === "analytics" && <Analytics attempts={attempts} mistakes={mistakes} goal={goal} setTab={setTab} />}
-        {tab === "planner" && (
-          <Planner
-            attempts={attempts} mistakes={mistakes} goal={goal} setGoal={setGoal}
-            plans={plans} setPlans={setPlans} setTab={setTab}
+        {tab === "results" && (
+          <ResultsPage
+            resultsTab={resultsTab}
+            setResultsTab={setResultsTab}
+            attempts={attempts}
+            setAttempts={setAttempts}
+            mistakes={mistakes}
+            setMistakes={setMistakes}
           />
         )}
-        {tab === "sim" && (
-          <Simulator
+        {tab === "practice" && (
+          <PracticePage
+            practiceTab={practiceTab}
+            setPracticeTab={setPracticeTab}
             adaptiveLaunch={adaptiveLaunch}
             onConsumeLaunch={() => setAdaptiveLaunch(null)}
             agentAction={agentAction}
             onPracticeResult={recordPracticeEvent}
+          />
+        )}
+        {tab === "progress" && (
+          <Progress attempts={attempts} mistakes={mistakes} goal={goal} setTab={setTab} mastery={mastery} priorities={priorities} />
+        )}
+        {tab === "planner" && (
+          <Planner
+            attempts={attempts} mistakes={mistakes} goal={goal} setGoal={setGoal}
+            plans={plans} setPlans={setPlans} setTab={setTab}
           />
         )}
         {tab === "more" && (
@@ -855,7 +895,7 @@ function Header({ goal, attempts, user, syncState, displayName, setTab, demo, on
             SATGene
           </div>
           <div className="sg-tagline">
-            Digital SAT practice hub · analytics · study planner
+            Adaptive SAT Preparation Agent
           </div>
         </div>
         <div className="sg-scores">
@@ -1070,12 +1110,10 @@ function Stat({ label, value, accent = C.ink, sub, small = false }) {
 // ---------- Nav ----------
 function Nav({ tab, setTab }) {
   const tabs = [
-    ["hub", "Practice Hub"],
-    ["tracker", "Test Tracker"],
-    ["mistakes", "Mistake Log"],
-    ["analytics", "Analytics"],
-    ["planner", "AI Planner"],
-    ["sim", "Test Simulator"],
+    ["hub", "Home"],
+    ["results", "My Results"],
+    ["practice", "Practice"],
+    ["progress", "Progress"],
     ["more", "More"],
   ];
   const refs = React.useRef({});
@@ -1125,72 +1163,23 @@ function SectionTitle({ kicker, title, sub }) {
 
 // ---------- 1. PRACTICE HUB (the centerpiece) ----------
 function Hub({ mastery, priorities, agentAction, mission, missionCompleted, onToggleMission, attempts, mistakes, goal, setTab, onStartPractice, agentNotices, planChange, onDismissNotices }) {
-  const [filter, setFilter] = useState("all");
-  const list = PROVIDERS.filter((p) => filter === "all" || p.tier === filter);
-
   return (
-    <>
-      <AgentDashboard
-        mastery={mastery}
-        priorities={priorities}
-        agentAction={agentAction}
-        mission={mission}
-        missionCompleted={missionCompleted}
-        onToggleMission={onToggleMission}
-        onStartPractice={onStartPractice}
-        attempts={attempts}
-        mistakes={mistakes}
-        goal={goal}
-        setTab={setTab}
-        agentNotices={agentNotices}
-        planChange={planChange}
-        onDismissNotices={onDismissNotices}
-      />
-
-      <SectionTitle
-        kicker="Start here"
-        title="Every practice test, in one place"
-        sub="Official practice is free and the most realistic — do it first. Paid vendors add extra question volume once you've exhausted the official pool. Each card opens the provider directly; SATGene never copies their questions."
-      />
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
-        {[["all", "All"], ["official", "Official (free)"], ["paid", "Paid vendors"]].map(([id, label]) => (
-          <button
-            key={id}
-            onClick={() => setFilter(id)}
-            style={{
-              padding: "7px 14px",
-              borderRadius: 20,
-              border: `1px solid ${filter === id ? C.accent : C.line}`,
-              background: filter === id ? C.accent : C.card,
-              color: filter === id ? "#fff" : C.ink2,
-              fontSize: 13,
-              fontWeight: 600,
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="sg-grid">
-        {list.map((p) => (
-          <ProviderCard key={p.id} p={p} />
-        ))}
-      </div>
-
-      <div style={{ marginTop: 28, background: C.soft, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
-        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6, fontFamily: FONT_DISPLAY }}>The recommended path</div>
-        <ol style={{ margin: 0, paddingLeft: 20, fontSize: 14, color: C.ink2, lineHeight: 1.7 }}>
-          <li>Download <b>Bluebook</b> and take a full-length test — it's the real test-day engine.</li>
-          <li>Open <b>My Practice</b> to see your score, then <b>Tailored Practice</b> for auto-targeted questions.</li>
-          <li>Use <b>Khan Academy</b> to learn the concept behind each missed question.</li>
-          <li>Drill weak skills in the <b>Student Question Bank</b>.</li>
-          <li>Log every result in <b>Test Tracker</b> and <b>Mistake Log</b> here so Analytics + the AI Planner can guide you.</li>
-          <li>Only if you exhaust official practice, add a paid <b>QBank</b> like UWorld.</li>
-        </ol>
-      </div>
-    </>
+    <AgentDashboard
+      mastery={mastery}
+      priorities={priorities}
+      agentAction={agentAction}
+      mission={mission}
+      missionCompleted={missionCompleted}
+      onToggleMission={onToggleMission}
+      onStartPractice={onStartPractice}
+      attempts={attempts}
+      mistakes={mistakes}
+      goal={goal}
+      setTab={setTab}
+      agentNotices={agentNotices}
+      planChange={planChange}
+      onDismissNotices={onDismissNotices}
+    />
   );
 }
 
@@ -1203,31 +1192,91 @@ function AgentDashboard({ mastery, priorities, agentAction, mission, missionComp
 
   return (
     <div style={{ marginBottom: 36 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <AgentBadge />
-        <h2 style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 24, margin: 0, letterSpacing: -0.4 }}>
-          SATGene Agent
-        </h2>
-      </div>
+      <h2 style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 24, margin: 0, letterSpacing: -0.4 }}>
+        SATGene Agent
+      </h2>
       <p style={{ color: C.ink2, fontSize: 14, margin: "6px 0 20px", maxWidth: 640 }}>
-        Your adaptive SAT coach. It reads your real Test Tracker and Mistake Log data — no guessing — and tells you exactly what to work on next.
+        Your adaptive SAT coach. It reads your real My Results data — no guessing — and tells you exactly what to work on next.
       </p>
 
       {!hasEvidence ? (
         <DiagnosticFallback setTab={setTab} />
       ) : (
         <>
-          <NoticedCard notices={agentNotices} onDismiss={onDismissNotices} />
-          <PlanChangeCard planChange={planChange} />
-          <div className="sg-agent-grid" style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: 16, marginBottom: 24, alignItems: "stretch" }}>
+          <div className="sg-agent-grid" style={{ display: "grid", gridTemplateColumns: "1.25fr 1fr", gap: 16, marginBottom: 16, alignItems: "stretch" }}>
             <style>{`@media (max-width: 860px){ .sg-agent-grid { grid-template-columns: 1fr !important; } }`}</style>
             <NextActionCard action={agentAction} setTab={setTab} onStartPractice={onStartPractice} />
             <MissionCard mission={mission} missionCompleted={missionCompleted} onToggle={onToggleMission} setTab={setTab} onStartPractice={onStartPractice} />
           </div>
+          <NoticedCard notices={agentNotices} onDismiss={onDismissNotices} />
+          <PlanChangeCard planChange={planChange} />
         </>
       )}
 
-      <MasteryPanel mastery={mastery} priorities={priorities} />
+      <MasterySnapshot mastery={mastery} priorities={priorities} setTab={setTab} />
+      <ActiveStudyPlanCard goal={goal} priorities={priorities} setTab={setTab} />
+    </div>
+  );
+}
+
+// ---- Mastery Snapshot (Home): a deliberately short list, not the full mastery
+// model — weakest + second priority + a couple of stronger skills, so Home stays
+// scannable. The full breakdown lives at Progress → SAT Mastery (MasteryPanel).
+function MasterySnapshot({ mastery, priorities, setTab }) {
+  const allSkills = Object.values(SKILLS).flat();
+  const priorityBySkill = {};
+  (priorities || []).forEach((p, i) => { priorityBySkill[p.skill] = i; });
+
+  const weakest = priorities && priorities[0] ? priorities[0].skill : null;
+  const second = priorities && priorities[1] ? priorities[1].skill : null;
+  const shown = new Set([weakest, second].filter(Boolean));
+
+  const stronger = allSkills
+    .filter((s) => !shown.has(s) && mastery?.[s]?.mastery != null)
+    .sort((a, b) => mastery[b].mastery - mastery[a].mastery)
+    .slice(0, 2);
+
+  const seen = new Set();
+  const displaySkills = [weakest, second, ...stronger].filter((s) => s && !seen.has(s) && (seen.add(s), true));
+
+  return (
+    <div style={{ marginTop: 4, marginBottom: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12, flexWrap: "wrap", gap: 6 }}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 16 }}>Mastery Snapshot</div>
+        <button onClick={() => setTab("progress")} className="sg-focus" style={{ ...btnGhost, padding: "4px 6px" }}>View all mastery →</button>
+      </div>
+      {displaySkills.length === 0 ? (
+        <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, fontSize: 13.5, color: C.ink2 }}>
+          Not enough evidence yet to rank your skills. Log a test score, a mistake, or complete a practice set to get started.
+        </div>
+      ) : (
+        <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, display: "grid", gap: 14 }}>
+          {displaySkills.map((skill) => (
+            <MasteryRow key={skill} skill={skill} rec={mastery?.[skill]} rank={priorityBySkill[skill]} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Active Study Plan (Home): a compact pointer into the AI Planner, which is
+// no longer in the primary nav — this + Progress are the only ways in.
+function ActiveStudyPlanCard({ goal, priorities, setTab }) {
+  const topSkill = priorities && priorities[0] ? priorities[0].skill : "Not enough data yet";
+  const nextSatText = goal.nextSatDate ? fmtAbbr(goal.nextSatDate) : "Not scheduled";
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20 }}>
+      <CardKicker>Active Study Plan</CardKicker>
+      <div style={{ display: "grid", gap: 4, margin: "10px 0 14px", fontSize: 13.5, color: C.ink2 }}>
+        <div><b style={{ color: C.ink }}>SAT Target:</b> {goal.satTarget}</div>
+        <div><b style={{ color: C.ink }}>Next SAT:</b> {nextSatText}</div>
+        <div><b style={{ color: C.ink }}>Current Priority:</b> {topSkill}</div>
+      </div>
+      <p style={{ fontSize: 13, color: C.ink2, margin: "0 0 14px", lineHeight: 1.5 }}>
+        SATGene automatically adjusts recommendations when new results are recorded.
+      </p>
+      <button onClick={() => setTab("planner")} style={{ ...btnGhostSolid, marginTop: 0 }}>View Full Plan →</button>
     </div>
   );
 }
@@ -1469,7 +1518,7 @@ function MasteryRow({ skill, rec, rank }) {
           {isTop && <Tag c={C.accent}>#1 priority</Tag>}
         </span>
         <span style={{ fontSize: 12.5, fontWeight: 700, color, whiteSpace: "nowrap" }}>
-          {score == null ? "Not Assessed" : `${score}% · ${status}`}
+          {score == null ? "Not assessed" : `${score}% · ${status}`}
         </span>
       </div>
       <div style={{ height: 7, background: C.soft, borderRadius: 4, overflow: "hidden" }} role="img" aria-label={`${skill} mastery: ${score == null ? "not assessed" : `${score}%, ${status}`}`}>
@@ -1519,7 +1568,39 @@ function ProviderCard({ p }) {
   );
 }
 
-// ---------- 2. TEST TRACKER ----------
+// ---------- MY RESULTS (Test Scores + Mistakes, combined) ----------
+function ResultsPage({ resultsTab, setResultsTab, attempts, setAttempts, mistakes, setMistakes }) {
+  return (
+    <>
+      <SectionTitle kicker="Your evidence" title="My Results" sub="SAT scores, practice scores, and mistakes — the evidence SATGene uses to understand your progress and decide what to work on next." />
+      <div style={{ display: "inline-flex", background: C.soft, borderRadius: 12, padding: 4, marginBottom: 22, flexWrap: "wrap" }} role="group" aria-label="My Results section">
+        {[["scores", "Test Scores"], ["mistakes", "Mistakes"]].map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setResultsTab(id)}
+            className="sg-focus"
+            aria-pressed={resultsTab === id}
+            style={{
+              padding: "9px 18px", borderRadius: 9, border: "none", fontSize: 13.5, fontWeight: 700,
+              background: resultsTab === id ? C.card : "transparent",
+              color: resultsTab === id ? C.ink : C.ink2,
+              boxShadow: resultsTab === id ? "0 1px 3px rgba(0,0,0,.08)" : "none",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {resultsTab === "mistakes" ? (
+        <Mistakes mistakes={mistakes} setMistakes={setMistakes} attempts={attempts} />
+      ) : (
+        <Tracker attempts={attempts} setAttempts={setAttempts} />
+      )}
+    </>
+  );
+}
+
+// ---------- 2. TEST TRACKER (My Results → Test Scores) ----------
 const SAT_SOURCES = ["College Board"];
 const PRACTICE_SOURCES = ["Bluebook", "Khan Academy", "Princeton Review", "Kaplan", "UWorld", "Magoosh", "School", "Paper", "Tutor", "Other"];
 
@@ -1543,8 +1624,21 @@ function Tracker({ attempts, setAttempts }) {
     setForm((f) => ({ ...f, testType, source: testType === "SAT" ? SAT_SOURCES[0] : PRACTICE_SOURCES[0] }));
   };
 
-  const total = (Number(form.rw) || 0) + (Number(form.math) || 0);
-  const valid = form.date && form.rw !== "" && form.math !== "";
+  // ---- Score validation (§7): a section score is only accepted in 200–800. Total
+  // is always derived (rw + math), never entered — so once both sections are valid
+  // it is automatically in the valid 400–1600 range. Invalid records are blocked
+  // from saving entirely (not silently dropped later in Progress).
+  const rwNum = Number(form.rw);
+  const mathNum = Number(form.math);
+  const rwEntered = form.rw !== "";
+  const mathEntered = form.math !== "";
+  const rwValid = rwEntered && Number.isFinite(rwNum) && rwNum >= 200 && rwNum <= 800;
+  const mathValid = mathEntered && Number.isFinite(mathNum) && mathNum >= 200 && mathNum <= 800;
+  const total = (rwValid ? rwNum : 0) + (mathValid ? mathNum : 0);
+  const validationErrors = [];
+  if (rwEntered && !rwValid) validationErrors.push("Reading & Writing score must be between 200 and 800.");
+  if (mathEntered && !mathValid) validationErrors.push("Math score must be between 200 and 800.");
+  const valid = Boolean(form.date) && rwValid && mathValid;
 
   const save = () => {
     if (!valid) return;
@@ -1585,7 +1679,7 @@ function Tracker({ attempts, setAttempts }) {
 
   return (
     <>
-      <SectionTitle kicker="Log results" title="Test Tracker" sub="Record both official SAT scores and practice-test scores. This is the source of truth for your header, analytics, and study plans." />
+      <p style={{ color: C.ink2, fontSize: 14, margin: "0 0 18px", maxWidth: 640 }}>Record both official SAT scores and practice-test scores. This is the source of truth for your header, Progress, and study plans.</p>
 
       {/* form */}
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
@@ -1617,18 +1711,38 @@ function Tracker({ attempts, setAttempts }) {
               {sources.map((s) => <option key={s}>{s}</option>)}
             </select>
           </Field>
-          <Field label="Reading & Writing"><input type="number" value={form.rw} onChange={(e) => setForm({ ...form, rw: e.target.value })} style={inp} placeholder="620" /></Field>
-          <Field label="Math"><input type="number" value={form.math} onChange={(e) => setForm({ ...form, math: e.target.value })} style={inp} placeholder="640" /></Field>
+          <Field label="Reading & Writing">
+            <input
+              type="number" value={form.rw} onChange={(e) => setForm({ ...form, rw: e.target.value })}
+              style={{ ...inp, ...(rwEntered && !rwValid ? invalidInp : {}) }} placeholder="620"
+              aria-invalid={rwEntered && !rwValid} min={200} max={800}
+            />
+          </Field>
+          <Field label="Math">
+            <input
+              type="number" value={form.math} onChange={(e) => setForm({ ...form, math: e.target.value })}
+              style={{ ...inp, ...(mathEntered && !mathValid ? invalidInp : {}) }} placeholder="640"
+              aria-invalid={mathEntered && !mathValid} min={200} max={800}
+            />
+          </Field>
           <Field label="Total (auto)">
-            <div style={{ ...inp, background: C.soft, fontWeight: 700, color: C.ink }}>{total || "—"}</div>
+            <div style={{ ...inp, background: C.soft, fontWeight: 700, color: C.ink }}>{rwValid && mathValid ? total : "—"}</div>
           </Field>
           <Field label={`Minutes${form.testType === "SAT" ? " (optional)" : ""}`}><input type="number" value={form.minutes} onChange={(e) => setForm({ ...form, minutes: e.target.value })} style={inp} placeholder="134" /></Field>
           <Field label={`Confidence (${form.confidence}/5)`}><input type="range" min="1" max="5" value={form.confidence} onChange={(e) => setForm({ ...form, confidence: +e.target.value })} style={{ width: "100%" }} /></Field>
         </div>
         <Field label="Notes"><input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} style={inp} placeholder="What went well / what to fix" /></Field>
 
+        {validationErrors.length > 0 && (
+          <div role="alert" style={{ marginTop: 10, display: "grid", gap: 4 }}>
+            {validationErrors.map((e, i) => (
+              <div key={i} style={{ fontSize: 12.5, color: "#B4443A" }}>{e}</div>
+            ))}
+          </div>
+        )}
+
         <div className="sg-btn-row" style={{ display: "flex", gap: 10 }}>
-          <button onClick={save} style={{ ...btnPrimary, opacity: valid ? 1 : 0.5 }}>{editingId ? "Save changes" : `Add ${form.testType === "SAT" ? "SAT" : "practice"} result`}</button>
+          <button onClick={save} disabled={!valid} style={{ ...btnPrimary, opacity: valid ? 1 : 0.5, cursor: valid ? "pointer" : "not-allowed" }}>{editingId ? "Save changes" : `Add ${form.testType === "SAT" ? "SAT" : "practice"} result`}</button>
           {editingId && <button onClick={cancelEdit} style={btnGhostSolid}>Cancel</button>}
         </div>
       </div>
@@ -1694,7 +1808,7 @@ function Mistakes({ mistakes, setMistakes, attempts }) {
 
   return (
     <>
-      <SectionTitle kicker="Learn from errors" title="Mistake Log" sub="Record why you missed each question — not the copyrighted question itself, just the skill and the lesson. Tag each as SAT or Practice so your plans can weigh them correctly." />
+      <p style={{ color: C.ink2, fontSize: 14, margin: "0 0 18px", maxWidth: 640 }}>Record why you missed each question — not the copyrighted question itself, just the skill and the lesson. Tag each as SAT or Practice so SATGene can weigh them correctly.</p>
 
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 20 }}>
         {/* Test Type selector */}
@@ -1891,7 +2005,7 @@ function satReadiness({ superscore, latestSat, practiceAvg, target, practiceCoun
   return { status, applicable, gap: Math.max(0, gap), basisIsSuperscore: superscore != null };
 }
 
-function Analytics({ attempts, mistakes, goal, setTab }) {
+function Progress({ attempts, mistakes, goal, setTab, mastery, priorities }) {
   const [testFilter, setTestFilter] = useState("all");   // all | Practice | SAT
   const [scoreFilter, setScoreFilter] = useState("total"); // total | rw | math
 
@@ -1928,14 +2042,14 @@ function Analytics({ attempts, mistakes, goal, setTab }) {
 
   return (
     <>
-      <SectionTitle kicker="See the pattern" title="Analytics" sub="Your Test Tracker and Mistake Log turned into clear, actionable insights. All calculations are deterministic — no AI." />
+      <SectionTitle kicker="Am I improving?" title="Progress" sub="Your My Results data turned into clear, actionable insights. All calculations are deterministic — no AI." />
 
       {invalid.length > 0 && (
         <div style={{ background: "#FBEAE8", border: "1px solid #E3B7B3", borderRadius: 12, padding: "12px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13.5, color: "#B4443A" }}>
             {invalid.length} test record{invalid.length === 1 ? " was" : "s were"} excluded because {invalid.length === 1 ? "its score is" : "their scores are"} incomplete or invalid.
           </span>
-          <button onClick={() => setTab("tracker")} style={{ ...btnGhostSolid, marginTop: 0, color: "#B4443A", borderColor: "#E3B7B3" }}>Review in Test Tracker</button>
+          <button onClick={() => setTab("tracker")} style={{ ...btnGhostSolid, marginTop: 0, color: "#B4443A", borderColor: "#E3B7B3" }}>Review in My Results</button>
         </div>
       )}
 
@@ -1983,27 +2097,31 @@ function Analytics({ attempts, mistakes, goal, setTab }) {
             <SectionProgressBlock sorted={sorted} testFilter={testFilter} setTestFilter={setTestFilter} target={target} secTargets={secTargets} />
           </ChartCard>
 
-          {/* 4. WHAT THE DATA SAYS */}
-          <SubHeading>What the Data Says</SubHeading>
-          <InsightsBlock sorted={sorted} satsAsc={satsAsc} pracAsc={pracAsc} superscore={superscore} target={target} practiceLast3Avg={practiceLast3Avg} secTargets={secTargets} />
-
-          {/* 5. PRACTICE CONSISTENCY */}
+          {/* 4. PRACTICE CONSISTENCY */}
           <SubHeading>Practice Consistency</SubHeading>
           <ConsistencyBlock sorted={sorted} />
 
-          {/* 6. WHERE POINTS ARE LEAKING */}
+          {/* 5. SAT MASTERY (full model — Home only shows a trimmed snapshot) */}
+          <SubHeading>SAT Mastery</SubHeading>
+          <MasteryPanel mastery={mastery} priorities={priorities} />
+
+          {/* 6. WHAT THE DATA SAYS */}
+          <SubHeading>What the Data Says</SubHeading>
+          <InsightsBlock sorted={sorted} satsAsc={satsAsc} pracAsc={pracAsc} superscore={superscore} target={target} practiceLast3Avg={practiceLast3Avg} secTargets={secTargets} />
+
+          {/* 7. WHERE POINTS ARE LEAKING */}
           <SubHeading>Where Points Are Leaking</SubHeading>
           <LeakingBlock categories={categories} setTab={setTab} />
 
-          {/* 7. SAT READINESS */}
+          {/* 8. SAT READINESS */}
           <SubHeading>SAT Readiness</SubHeading>
           <ReadinessBlock readiness={readiness} superscore={superscore} latestSat={latestSat} practiceLast3Avg={practiceLast3Avg} target={target} daysToSat={daysToSat} />
 
-          {/* 8. RECOMMENDED NEXT STEPS */}
+          {/* 9. RECOMMENDED NEXT STEPS */}
           <SubHeading>Recommended Next Steps</SubHeading>
           <NextStepsBlock categories={categories} sorted={sorted} secTargets={secTargets} latestSat={latestSat} pracAsc={pracAsc} goal={goal} setTab={setTab} />
 
-          {/* 9. TEST HISTORY */}
+          {/* 10. TEST HISTORY */}
           <SubHeading>Test History</SubHeading>
           <TestHistoryBlock valid={valid} />
         </>
@@ -2454,6 +2572,16 @@ function Planner({ attempts, mistakes, goal, setGoal, plans, setPlans, setTab })
     <>
       <SectionTitle kicker="What to do next" title="AI Study Planner" sub="Separate plans for the official SAT and for your next practice test. Each reads your saved scores and mistakes. AI plans use a model; Instant plans use a built-in rule engine that always works." />
 
+      <div style={{ display: "flex", alignItems: "center", gap: 10, background: C.soft, border: `1px solid ${C.line}`, borderRadius: 14, padding: 16, marginBottom: 20 }}>
+        <AgentBadge />
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 14 }}>Agent-managed plan</div>
+          <div style={{ fontSize: 13, color: C.ink2, marginTop: 2, lineHeight: 1.5 }}>
+            SATGene automatically adapts your recommendations as new performance data is recorded. You can also generate a complete plan manually below.
+          </div>
+        </div>
+      </div>
+
       {/* sub-tabs */}
       <div style={{ display: "inline-flex", background: C.soft, borderRadius: 12, padding: 4, marginBottom: 20 }}>
         {[["SAT", "SAT Plan"], ["Practice", "Practice Plan"]].map(([id, label]) => (
@@ -2702,80 +2830,104 @@ function PlanRow({ label, value }) {
   );
 }
 
-// Saved plan history for the current kind.
+// Saved plan history for the current kind. Only the current (most recent) plan
+// shows by default; older plans collapse behind "Previous Plans (N)" so the page
+// doesn't dump a long list on the student — nothing is deleted, just collapsed.
 function SavedPlans({ plans, filterKind, openPlanId, setOpenPlanId, onDelete }) {
+  const [showPrevious, setShowPrevious] = useState(false);
   const list = plans.filter((p) => p.planType === filterKind);
   if (list.length === 0) {
     return (
       <div style={{ marginTop: 8 }}>
-        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8, fontFamily: FONT_DISPLAY }}>Saved {filterKind} plans</div>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8, fontFamily: FONT_DISPLAY }}>Current plan</div>
         <Empty text={`No ${filterKind} plans yet. Generate one above — every plan is saved here.`} />
       </div>
     );
   }
   const fmtDate = (iso) => { try { return new Date(iso).toLocaleString(); } catch { return iso; } };
+  const fmtDateShort = (iso) => { try { return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }); } catch { return iso; } };
+
+  const [current, ...previous] = list;
+
+  const renderPlan = (p, idx, isCurrent) => {
+    const open = openPlanId === p.id;
+    return (
+      <div key={p.id} style={{ background: C.card, border: `1px solid ${isCurrent ? C.accent : C.line}`, borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "12px 16px", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {isCurrent && <Tag c={C.accent}>Current</Tag>}
+            <Tag c={p.genType === "AI" ? C.paid : C.ink2}>{p.genType}</Tag>
+            <span style={{ fontSize: 13, color: C.ink2 }}>{fmtDate(p.createdAt)}</span>
+            {p.currentScore != null && <span style={{ fontSize: 13, color: C.ink2 }}>· current {p.currentScore}</span>}
+            {p.targetScore != null && <span style={{ fontSize: 13, color: C.ink2 }}>· target {p.targetScore}</span>}
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => setOpenPlanId(open ? null : p.id)} style={btnGhost}>{open ? "Hide" : isCurrent ? "Open Current Plan" : "Open"}</button>
+            <button onClick={() => onDelete(p.id)} style={btnGhost}>Delete</button>
+          </div>
+        </div>
+        {open && <div style={{ padding: "0 16px 16px" }}><PlanContent content={p.content} /></div>}
+      </div>
+    );
+  };
 
   return (
     <div style={{ marginTop: 8 }}>
-      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10, fontFamily: FONT_DISPLAY }}>Saved {filterKind} plans</div>
-      <div style={{ display: "grid", gap: 10 }}>
-        {list.map((p, idx) => {
-          const open = openPlanId === p.id;
-          return (
-            <div key={p.id} style={{ background: C.card, border: `1px solid ${idx === 0 ? C.accent : C.line}`, borderRadius: 12, overflow: "hidden" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "12px 16px", flexWrap: "wrap" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  {idx === 0 && <Tag c={C.accent}>Latest</Tag>}
-                  <Tag c={p.genType === "AI" ? C.paid : C.ink2}>{p.genType}</Tag>
-                  <span style={{ fontSize: 13, color: C.ink2 }}>{fmtDate(p.createdAt)}</span>
-                  {p.currentScore != null && <span style={{ fontSize: 13, color: C.ink2 }}>· current {p.currentScore}</span>}
-                  {p.targetScore != null && <span style={{ fontSize: 13, color: C.ink2 }}>· target {p.targetScore}</span>}
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => setOpenPlanId(open ? null : p.id)} style={btnGhost}>{open ? "Hide" : "Open"}</button>
-                  <button onClick={() => onDelete(p.id)} style={btnGhost}>Delete</button>
-                </div>
-              </div>
-              {open && <div style={{ padding: "0 16px 16px" }}><PlanContent content={p.content} /></div>}
-            </div>
-          );
-        })}
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 10, fontFamily: FONT_DISPLAY }}>Current plan</div>
+      <div style={{ fontSize: 13, color: C.ink2, marginBottom: 10 }}>
+        {current.genType} Plan · {fmtDateShort(current.createdAt)}
+        {current.currentScore != null && current.targetScore != null ? ` — Current ${current.currentScore} → Target ${current.targetScore}` : ""}
       </div>
+      <div style={{ display: "grid", gap: 10 }}>
+        {renderPlan(current, 0, true)}
+      </div>
+
+      {previous.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <button onClick={() => setShowPrevious((s) => !s)} className="sg-focus" style={{ ...btnGhost, padding: "6px 0", fontSize: 13.5 }}>
+            Previous Plans ({previous.length}) {showPrevious ? "▲" : "▼"}
+          </button>
+          {showPrevious && (
+            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+              {previous.map((p, idx) => renderPlan(p, idx + 1, false))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-// ---------- 6. SIMULATOR (structure + timing only; questions are Phase 2 / your own bank) ----------
-// ---------- 5. TEST SIMULATOR (full-length mock + Phase 2 adaptive practice) ----------
-function Simulator({ adaptiveLaunch, onConsumeLaunch, agentAction, onPracticeResult }) {
-  const [mode, setMode] = useState(adaptiveLaunch ? "adaptive" : "full");
-
-  // If the agent (or the student) launches adaptive practice while already on this
-  // tab, switch modes to meet it — one shared launch signal, no duplicate logic.
+// ---------- PRACTICE (Adaptive Practice + Full SAT Simulation + Resources) ----------
+function PracticePage({ practiceTab, setPracticeTab, adaptiveLaunch, onConsumeLaunch, agentAction, onPracticeResult }) {
+  // If the agent (or the student) launches adaptive practice while on another
+  // Practice sub-tab, switch to meet it — one shared launch signal, no duplicate logic.
   useEffect(() => {
-    if (adaptiveLaunch) setMode("adaptive");
-  }, [adaptiveLaunch]);
+    if (adaptiveLaunch) setPracticeTab("adaptive");
+  }, [adaptiveLaunch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const labels = { adaptive: "Adaptive Practice", full: "Full SAT Simulation", resources: "Resources" };
 
   return (
     <>
       <SectionTitle
         kicker="Practice, your way"
-        title="Test Simulator"
-        sub="Run a short adaptive practice set the SATGene Agent targets at your weakest skill, or the full-length timed mock that mirrors the real exam's structure and pacing."
+        title="Practice"
+        sub="Complete SATGene-recommended adaptive practice, run a full-length timed mock, or open trusted SAT resources."
       />
 
-      <div style={{ display: "inline-flex", background: C.soft, borderRadius: 12, padding: 4, marginBottom: 22, flexWrap: "wrap" }} role="group" aria-label="Simulator mode">
-        {[["adaptive", "Adaptive Practice"], ["full", "Full-Length Simulation"]].map(([id, label]) => (
+      <div style={{ display: "inline-flex", background: C.soft, borderRadius: 12, padding: 4, marginBottom: 22, flexWrap: "wrap" }} role="group" aria-label="Practice section">
+        {Object.entries(labels).map(([id, label]) => (
           <button
             key={id}
-            onClick={() => setMode(id)}
+            onClick={() => setPracticeTab(id)}
             className="sg-focus"
-            aria-pressed={mode === id}
+            aria-pressed={practiceTab === id}
             style={{
               padding: "9px 16px", borderRadius: 9, border: "none", fontSize: 13.5, fontWeight: 700,
-              background: mode === id ? C.card : "transparent",
-              color: mode === id ? C.ink : C.ink2,
-              boxShadow: mode === id ? "0 1px 3px rgba(0,0,0,.08)" : "none",
+              background: practiceTab === id ? C.card : "transparent",
+              color: practiceTab === id ? C.ink : C.ink2,
+              boxShadow: practiceTab === id ? "0 1px 3px rgba(0,0,0,.08)" : "none",
             }}
           >
             {label}
@@ -2783,16 +2935,67 @@ function Simulator({ adaptiveLaunch, onConsumeLaunch, agentAction, onPracticeRes
         ))}
       </div>
 
-      {mode === "adaptive" ? (
+      {practiceTab === "adaptive" && (
         <AdaptivePractice
           launch={adaptiveLaunch}
           onConsumeLaunch={onConsumeLaunch}
           agentAction={agentAction}
           onPracticeResult={onPracticeResult}
         />
-      ) : (
-        <FullSimulation />
       )}
+      {practiceTab === "full" && <FullSimulation />}
+      {practiceTab === "resources" && <ResourcesPanel />}
+    </>
+  );
+}
+
+// ---- Resources (moved off Home — external SAT prep providers, links only) ----
+function ResourcesPanel() {
+  const [filter, setFilter] = useState("all");
+  const list = PROVIDERS.filter((p) => filter === "all" || p.tier === filter);
+  return (
+    <>
+      <p style={{ color: C.ink2, fontSize: 14, margin: "0 0 16px", maxWidth: 640 }}>
+        Official practice is free and the most realistic — do it first. Paid vendors add extra question volume once you've exhausted the official pool. Each card opens the provider directly; SATGene never copies their questions.
+      </p>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
+        {[["all", "All"], ["official", "Official"], ["paid", "Paid vendors"]].map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setFilter(id)}
+            style={{
+              padding: "7px 14px",
+              borderRadius: 20,
+              border: `1px solid ${filter === id ? C.accent : C.line}`,
+              background: filter === id ? C.accent : C.card,
+              color: filter === id ? "#fff" : C.ink2,
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="sg-grid">
+        {list.map((p) => (
+          <ProviderCard key={p.id} p={p} />
+        ))}
+      </div>
+
+      <div style={{ marginTop: 28, background: C.soft, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6, fontFamily: FONT_DISPLAY }}>The recommended path</div>
+        <ol style={{ margin: 0, paddingLeft: 20, fontSize: 14, color: C.ink2, lineHeight: 1.7 }}>
+          <li>Download <b>Bluebook</b> and take a full-length test — it's the real test-day engine.</li>
+          <li>Open <b>My Practice</b> to see your score, then <b>Tailored Practice</b> for auto-targeted questions.</li>
+          <li>Use <b>Khan Academy</b> to learn the concept behind each missed question.</li>
+          <li>Drill weak skills in the <b>Student Question Bank</b>.</li>
+          <li>Log every result in <b>My Results</b> so Progress + the AI Planner can guide you.</li>
+          <li>Only if you exhaust official practice, add a paid <b>QBank</b> like UWorld.</li>
+        </ol>
+      </div>
     </>
   );
 }
@@ -2834,7 +3037,7 @@ function FullSimulation() {
             <b>Adaptive logic:</b> Module 1 runs at medium difficulty. Score high → Module 2 gets harder (unlocks the top score band). Score low → Module 2 gets easier. This mirrors the official section-adaptive design and is labeled as a simulation, not an official scoring engine.
           </div>
           <button onClick={() => { setRunning(true); setModIdx(0); setSeconds(0); }} style={btnPrimary}>Start timed simulation</button>
-          <p style={{ fontSize: 12, color: C.ink2, marginTop: 14 }}>This mode reproduces the real exam's format and pacing only — it never reuses copied questions. For scored practice with real questions, use Adaptive Practice above.</p>
+          <p style={{ fontSize: 12, color: C.ink2, marginTop: 14 }}>This is a prototype simulation of the digital SAT's structure and pacing only — it is not official College Board scoring and never reuses copied questions. For scored practice with real questions, use Adaptive Practice.</p>
         </div>
       ) : (
         <div style={{ background: C.ink, color: "#fff", borderRadius: 16, padding: 30, textAlign: "center" }}>
@@ -3169,7 +3372,7 @@ function PracticeSummary({ session, onRestart }) {
       <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 40, marginBottom: 4 }}>{session.correctCount}/{session.targetCount}</div>
       <div style={{ color: C.ink2, fontSize: 14, marginBottom: 18 }}>{pct}% correct on {session.skill} ({session.section})</div>
       <p style={{ fontSize: 13, color: C.ink2, maxWidth: 440, margin: "0 auto 20px" }}>
-        Your SAT Mastery for {session.skill} just updated on the Practice Hub based on these results.
+        Your SAT Mastery for {session.skill} just updated on Home based on these results.
       </p>
       <button onClick={onRestart} style={btnPrimary}>Practice another skill →</button>
     </div>
@@ -3465,12 +3668,11 @@ function DataPrivacyPanel({ profile, goal, attempts, mistakes, plans, setGoal, s
 // ---- Help & User Guide panel ----
 function HelpPanel() {
   const guide = [
-    ["Practice Hub", "Organize your practice activities and open official and vendor study resources. SATGene links out to providers and does not reproduce copyrighted official SAT questions."],
-    ["Test Tracker", "Log both practice and official SAT results. Test Type distinguishes Practice from SAT. Reading & Writing plus Math makes the total. Official SAT records can contribute to your superscore; practice-test scores never do."],
-    ["Mistake Log", "Record each miss with its Test Type, section, topic, error type, notes, corrective action, and status. Saved mistakes can be used by the AI Planner to target weak areas."],
-    ["Analytics", "See score trends, Reading & Writing and Math trends, practice-versus-official performance, progress toward your target, and how your superscore is formed."],
-    ["AI Planner", "Separate SAT and Practice plans. Generate AI plans from a model, or Instant rule-based plans that always work. Every plan is saved to history. AI-generated content may contain errors."],
-    ["Test Simulator", "Practice the real digital SAT structure and timing. Questions are original or your own — the simulator does not use official College Board questions, and its results are not official SAT scores."],
+    ["Home", "SATGene analyzes your saved results and recommends what you should work on next — Next Best Action, Today's Mission, SATGene Noticed, a mastery snapshot, and your active study plan."],
+    ["My Results", "Record official SAT scores, practice-test scores, and mistakes under Test Scores and Mistakes. These become the evidence SATGene uses to understand your progress. Official SAT records can contribute to your superscore; practice-test scores never do."],
+    ["Practice", "Complete SATGene-recommended adaptive practice, run a full-length timed SAT simulation, or open trusted official and vendor SAT resources."],
+    ["Progress", "See score trends, section trends, mastery, weak areas, SAT readiness, and recommended next steps — answers the question \"Am I improving?\""],
+    ["More", "Manage your profile, settings, data & privacy, help, and application information. The AI Planner is reached from Home → Active Study Plan → View Full Plan, or from Progress."],
   ];
   return (
     <>
@@ -3510,14 +3712,12 @@ function AboutPanel() {
       <PanelCard>
         <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 8 }}>Features</div>
         <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13.5, color: C.ink2, lineHeight: 1.7 }}>
-          <li><b>Practice Hub</b> — organize practice and open study resources.</li>
-          <li><b>SAT & Practice Test Tracker</b> — log official and practice results separately.</li>
-          <li><b>Mistake Log</b> — record and categorize errors for review.</li>
-          <li><b>Score Analytics</b> — trends across sections and test types.</li>
+          <li><b>SATGene Agent (Home)</b> — Next Best Action, Today's Mission, and SATGene Noticed, from your real data.</li>
+          <li><b>My Results</b> — log official and practice SAT scores and mistakes separately.</li>
+          <li><b>Practice</b> — agent-directed adaptive practice, a full-length simulation, and trusted SAT resources.</li>
+          <li><b>Progress</b> — score and section trends, mastery, weak areas, readiness, and next steps.</li>
           <li><b>SAT Superscore</b> — best section scores across official SATs.</li>
-          <li><b>AI SAT Plan & Practice Plan</b> — model-generated study guidance.</li>
-          <li><b>Instant rule-based planning</b> — works with no AI.</li>
-          <li><b>Test Simulator</b> — real structure and timing practice.</li>
+          <li><b>AI Study Planner</b> — agent-managed, with model-generated or Instant rule-based plans.</li>
           <li><b>User-specific saved data</b> — isolated to your account.</li>
         </ul>
         <p style={{ fontSize: 13, color: C.ink2, lineHeight: 1.6, marginTop: 12, marginBottom: 0 }}>
@@ -3567,6 +3767,7 @@ function Empty({ text }) {
 }
 
 const inp = { width: "100%", padding: "11px 12px", minHeight: 44, border: `1px solid ${C.line}`, borderRadius: 9, fontSize: 14, background: "#fff", color: C.ink, outline: "none" };
+const invalidInp = { borderColor: "#B4443A", background: "#FBEAE8" };
 const btnPrimary = { marginTop: 14, minHeight: 44, background: C.accent, color: "#fff", border: "none", padding: "11px 20px", borderRadius: 10, fontSize: 14, fontWeight: 700 };
 const btnGhost = { background: "none", border: "none", color: C.ink2, fontSize: 13, fontWeight: 600, padding: "8px 10px" };
 const btnGhostSolid = { marginTop: 14, minHeight: 44, background: "#fff", color: C.ink, border: `1px solid ${C.line}`, padding: "11px 20px", borderRadius: 10, fontSize: 14, fontWeight: 700 };

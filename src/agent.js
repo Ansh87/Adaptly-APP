@@ -137,10 +137,14 @@ export function recomputeMastery({ mastery, attempts = [], mistakes = [], practi
       // Blend toward section evidence when practice volume is low.
       const secScore = sectionPct ? sectionPct[section] * 100 : practiceScore;
       score = practiceScore * volumeConfidence + secScore * (1 - volumeConfidence);
-    } else if (sectionPct) {
-      // No practice yet: seed a soft estimate from section score (supporting only).
-      score = sectionPct[section] * 100;
     }
+    // NOTE: when there is no direct skill-level evidence (no adaptive-practice
+    // attempts for this specific skill), score stays null — "Not Assessed" — even
+    // if a section-level test score exists. A single R&W or Math section score is
+    // broad evidence for the whole section, not proof about any one skill inside
+    // it, so it must never be used to invent a per-skill mastery number (including
+    // a fabricated 0%). Section evidence is still used above as a supporting blend
+    // once direct practice evidence exists (see secScore).
 
     // Penalize for recent unresolved mistakes (each shaves a few points, capped).
     if (score != null && rec.recentMistakes > 0) {
