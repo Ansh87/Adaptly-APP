@@ -226,6 +226,10 @@ export function computePriorities({ mastery, mistakes = [], goal = {}, attempts 
       mastery: r.mastery,
       status: masteryStatus(r.mastery),
       recentMistakes: r.recentMistakes || 0,
+      // Direct adaptive-practice evidence count for this skill. Used by
+      // nextBestAction to tell "we have real skill-level evidence somewhere"
+      // apart from "we only have a broad section score" (see Fix 3 below).
+      attempts: r.attempts || 0,
       factors: { masteryWeakness, recentMistakes, incorrectRate, lowConfidence, recency, timePressure },
     };
   });
@@ -235,11 +239,45 @@ export function computePriorities({ mastery, mistakes = [], goal = {}, attempts 
 
 // ---- NEXT BEST ACTION ---------------------------------------------------
 // The top-priority skill becomes the recommendation, with a data-grounded reason.
+const START_DIFFICULTY_BY_STATUS = {
+  "Needs Review": "easy",
+  Developing: "medium",
+  Strong: "hard",
+  "Not Assessed": "medium", // diagnostic starting point — never "hard" by default
+};
+
 export function nextBestAction({ priorities, mistakes = [], attempts = [] }) {
   const enoughData = attempts.length > 0 || mistakes.length > 0;
   if (!enoughData || !priorities || priorities.length === 0) {
     return { kind: "diagnostic", reason: "Complete a diagnostic practice session so SATGene can identify your priorities." };
   }
+
+  // Don't invent a skill weakness from a section score alone. If we have test
+  // scores (`attempts`, i.e. Test Tracker records) but no skill-level evidence
+  // anywhere — no Mistake Log entry tagged with a skill, and no priority with
+  // direct adaptive-practice attempts — a total Math or R&W score is not enough
+  // to name a specific SAT domain as "the weakness." Recommend a diagnostic on
+  // the weaker section instead, and let normal Next Best Action logic resume
+  // once real skill-level evidence exists.
+  const hasSkillEvidence =
+    mistakes.some((m) => m.skill) || priorities.some((p) => (p.attempts || 0) > 0);
+  if (attempts.length > 0 && !hasSkillEvidence) {
+    const latestValid = [...attempts]
+      .filter((a) => a && a.rw != null && a.math != null)
+      .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+    if (latestValid) {
+      const weakerSection = Number(latestValid.math) <= Number(latestValid.rw) ? "Math" : "Reading & Writing";
+      return {
+        kind: "sectionDiagnostic",
+        section: weakerSection,
+        reason: `We have your ${weakerSection} section score, but not enough skill-level evidence yet. Complete a short diagnostic so SATGene can identify the specific area to work on next.`,
+        questionCount: 6,
+        minutes: 15,
+        startDifficulty: "medium",
+      };
+    }
+  }
+
   const top = priorities[0];
 
   // Build a concrete, data-grounded "why" from the mistake log.
@@ -252,7 +290,7 @@ export function nextBestAction({ priorities, mistakes = [], attempts = [] }) {
   if (skillMistakes.length > 0 && recentSection.length > 0) {
     reason = `${inSkill} of your last ${recentSection.length} ${top.section} mistakes were in this skill.`;
   } else if (top.mastery != null) {
-    reason = `Your ${top.skill} mastery is ${top.mastery}% (${top.status}), your lowest current priority area.`;
+    reason = `Your ${top.skill} mastery is ${top.mastery}% (${top.status}), your highest-priority area right now.`;
   } else {
     reason = `${top.skill} hasn't been assessed yet and is a likely gap to probe first.`;
   }
@@ -269,7 +307,7 @@ export function nextBestAction({ priorities, mistakes = [], attempts = [] }) {
     minutes: estMinutes,
     questionCount,
     reason,
-    startDifficulty: top.status === "Needs Review" ? "easy" : top.status === "Developing" ? "medium" : "hard",
+    startDifficulty: START_DIFFICULTY_BY_STATUS[top.status] || "medium",
   };
 }
 

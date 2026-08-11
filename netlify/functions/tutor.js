@@ -14,10 +14,25 @@
 // Request body:  { section, skill, difficulty, prompt, choices, correctIndex, studentAnswerIndex }
 // Response body: { explanation }
 //   On upstream failure the frontend falls back to the bank's own explanation text.
+//   Requires "Authorization: Bearer <Firebase ID token>" — see _verifyAuth.js.
+
+import { verifyRequestAuth } from "./_verifyAuth.js";
 
 export default async (req) => {
   if (req.method !== "POST") {
     return json({ error: "Use POST" }, 405);
+  }
+
+  // Fix 8: never spend a Gemini call for an unauthenticated caller.
+  let authResult;
+  try {
+    authResult = await verifyRequestAuth(req);
+  } catch (e) {
+    console.error("[tutor] Auth verification unavailable:", e?.message || e);
+    return json({ error: "Sign-in verification is not configured on the server." }, 500);
+  }
+  if (!authResult) {
+    return json({ error: "Sign in required." }, 401);
   }
 
   const apiKey = process.env.GEMINI_API_KEY;

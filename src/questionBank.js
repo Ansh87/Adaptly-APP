@@ -1043,12 +1043,41 @@ export const QUESTION_BANK = {
 };
 
 // ---- helpers ----
+// Avoid repeating a question the student already saw earlier in the same
+// practice set (Fix 9). Preference order:
+//   1. An unused question at the desired difficulty.
+//   2. An unused question at the nearest adjacent difficulty (by distance in
+//      DIFFICULTIES — e.g. from "medium" try "easy" and "hard" before giving up).
+//   3. Only recycle (reuse an already-asked question) once every question for
+//      that skill, across all difficulties, has been exhausted — preferring the
+//      desired difficulty's own bucket when recycling.
 export function pickQuestion(skill, difficulty, excludeIds = []) {
-  const bucket = (QUESTION_BANK[skill] && QUESTION_BANK[skill][difficulty]) || [];
-  const pool = bucket.filter((q) => !excludeIds.includes(q.id));
-  const useBucket = pool.length > 0 ? pool : bucket; // recycle if exhausted
-  if (useBucket.length === 0) return null;
-  return useBucket[Math.floor(Math.random() * useBucket.length)];
+  const skillBank = QUESTION_BANK[skill] || {};
+  const bucketFor = (d) => skillBank[d] || [];
+  const unusedIn = (d) => bucketFor(d).filter((q) => !excludeIds.includes(q.id));
+
+  // 1) Unused at the desired difficulty.
+  const primary = unusedIn(difficulty);
+  if (primary.length > 0) return primary[Math.floor(Math.random() * primary.length)];
+
+  // 2) Unused at the nearest adjacent difficulty (by index distance).
+  const idx = DIFFICULTIES.indexOf(difficulty);
+  const others = DIFFICULTIES
+    .map((d, i) => ({ d, dist: Math.abs(i - (idx === -1 ? 1 : idx)) }))
+    .filter((x) => x.d !== difficulty)
+    .sort((a, b) => a.dist - b.dist);
+  for (const { d } of others) {
+    const unused = unusedIn(d);
+    if (unused.length > 0) return unused[Math.floor(Math.random() * unused.length)];
+  }
+
+  // 3) Every question for this skill has been asked already in this set —
+  // only now recycle, preferring the desired difficulty's own bucket.
+  const wholeSkillBank = DIFFICULTIES.flatMap((d) => bucketFor(d));
+  if (wholeSkillBank.length === 0) return null;
+  const desiredBucket = bucketFor(difficulty);
+  const recyclePool = desiredBucket.length > 0 ? desiredBucket : wholeSkillBank;
+  return recyclePool[Math.floor(Math.random() * recyclePool.length)];
 }
 
 export function bankSizeFor(skill, difficulty) {

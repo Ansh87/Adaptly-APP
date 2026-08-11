@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import Login from "./Login.jsx";
 import logo from "./assets/satgene-logo.png";
-import { watchAuth, logout, loadUserData, saveUserData, deleteAccount, reauthenticate } from "./firebase";
+import { watchAuth, logout, loadUserData, saveUserData, deleteAccount, reauthenticate, getIdToken } from "./firebase";
 import {
   blankMastery,
   recomputeMastery,
@@ -536,6 +536,13 @@ function AppShell({ user, demo = false, onExitDemo }) {
   const [dataLoaded, setDataLoaded] = useState(false);
   const [syncState, setSyncState] = useState("idle"); // idle | saving | saved | error
 
+  // Single source of truth for "which score records count" (Fix 4). Every
+  // agent/planner/header calculation reads validAttempts, never the raw
+  // attempts array — invalid records stay visible and editable in My Results →
+  // Test Scores (via the raw `attempts` state) but never influence a number or
+  // recommendation shown anywhere else.
+  const validAttempts = useMemo(() => getValidAttempts(attempts), [attempts]);
+
   // Holds the mastery map as saved in Firestore until the first recompute pass
   // consumes it (so mastery.history/trend carries forward across sessions instead
   // of resetting every reload).
@@ -594,17 +601,17 @@ function AppShell({ user, demo = false, onExitDemo }) {
     setMastery((prev) => {
       const seed = loadedMasteryRef.current !== null ? loadedMasteryRef.current : prev;
       loadedMasteryRef.current = null;
-      const next = recomputeMastery({ mastery: seed, attempts, mistakes, practiceEvents });
+      const next = recomputeMastery({ mastery: seed, attempts: validAttempts, mistakes, practiceEvents });
       setAgentSnapshot((snap) => {
         if (snap !== null) return snap;
-        if (attempts.length === 0 && mistakes.length === 0) return snap;
-        const prio = computePriorities({ mastery: next, mistakes, goal, attempts });
-        const action = nextBestAction({ priorities: prio, mistakes, attempts });
+        if (validAttempts.length === 0 && mistakes.length === 0) return snap;
+        const prio = computePriorities({ mastery: next, mistakes, goal, attempts: validAttempts });
+        const action = nextBestAction({ priorities: prio, mistakes, attempts: validAttempts });
         return buildAgentSnapshot({ mastery: next, agentAction: action, mistakes, practiceEvents });
       });
       return next;
     });
-  }, [attempts, mistakes, practiceEvents, dataLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [validAttempts, mistakes, practiceEvents, dataLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Save to Firestore whenever data changes (after the initial load completes).
   // HARD SAFETY GUARD: Demo Student mode NEVER reaches saveUserData — this is the
@@ -628,18 +635,26 @@ function AppShell({ user, demo = false, onExitDemo }) {
 
   // ---- Derived agent outputs (pure, deterministic, no AI call) ----
   const priorities = useMemo(
-    () => computePriorities({ mastery, mistakes, goal, attempts }),
-    [mastery, mistakes, goal, attempts]
+    () => computePriorities({ mastery, mistakes, goal, attempts: validAttempts }),
+    [mastery, mistakes, goal, validAttempts]
   );
   const agentAction = useMemo(
-    () => nextBestAction({ priorities, mistakes, attempts }),
-    [priorities, mistakes, attempts]
+    () => nextBestAction({ priorities, mistakes, attempts: validAttempts }),
+    [priorities, mistakes, validAttempts]
   );
   const mission = useMemo(
-    () => todaysMission({ priorities, mistakes, attempts, goal, completed: missionCompleted }),
-    [priorities, mistakes, attempts, goal, missionCompleted]
+    () => todaysMission({ priorities, mistakes, attempts: validAttempts, goal, completed: missionCompleted }),
+    [priorities, mistakes, validAttempts, goal, missionCompleted]
   );
   const toggleMissionItem = (id) => setMissionCompleted((prev) => ({ ...prev, [id]: !prev[id] }));
+  // Fix 5: auto-complete a Today's Mission item when the practice set it
+  // launched from finishes successfully. Only ever sets true — never toggles
+  // an item back off — so it can't clobber a manual completion. The manual
+  // checkbox in MissionCard remains available too.
+  const completeMissionItem = (id) => {
+    if (!id) return;
+    setMissionCompleted((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
+  };
 
   // ---- Auto-reassessment change tracking (Phase 3, pure/deterministic, no AI) ----
   const agentNotices = useMemo(
@@ -728,7 +743,7 @@ function AppShell({ user, demo = false, onExitDemo }) {
 
       {demo && <DemoBanner onExitDemo={onExitDemo} />}
 
-      <Header attempts={attempts} goal={goal} user={user} syncState={syncState} displayName={displayName} setTab={setTab} demo={demo} onExitDemo={onExitDemo} />
+      <Header attempts={validAttempts} goal={goal} user={user} syncState={syncState} displayName={displayName} setTab={setTab} demo={demo} onExitDemo={onExitDemo} />
 
       <Nav tab={tab} setTab={setTab} />
 
@@ -769,6 +784,9 @@ function AppShell({ user, demo = false, onExitDemo }) {
             onConsumeLaunch={() => setAdaptiveLaunch(null)}
             agentAction={agentAction}
             onPracticeResult={recordPracticeEvent}
+            mastery={mastery}
+            onCompleteMissionItem={completeMissionItem}
+            setTab={setTab}
           />
         )}
         {tab === "progress" && (
@@ -776,8 +794,9 @@ function AppShell({ user, demo = false, onExitDemo }) {
         )}
         {tab === "planner" && (
           <Planner
-            attempts={attempts} mistakes={mistakes} goal={goal} setGoal={setGoal}
+            attempts={validAttempts} mistakes={mistakes} goal={goal} setGoal={setGoal}
             plans={plans} setPlans={setPlans} setTab={setTab}
+            mastery={mastery} priorities={priorities} practiceEvents={practiceEvents}
           />
         )}
         {tab === "more" && (
@@ -855,8 +874,8 @@ function Header({ goal, attempts, user, syncState, displayName, setTab, demo, on
 
         /* Main header row: logo left, scores right, tight vertical spacing */
         .sg-header-main { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding-top: 6px; padding-bottom: 12px; }
-        .sg-logo { height: 46px; width: auto; max-width: 100%; }
-        .sg-tagline { font-size: 13px; color: ${C.ink2}; margin-top: 3px; }
+        .sg-logo { height: 54px; width: auto; max-width: 100%; }
+        .sg-tagline { font-size: 15px; font-weight: 600; font-family: ${FONT_DISPLAY}; color: ${C.ink}; margin-top: 4px; letter-spacing: -0.1px; }
 
         /* Content-sized score cards via flexible auto-fit grid */
         .sg-scores { display: grid; grid-auto-flow: column; grid-auto-columns: max-content; gap: 10px; justify-content: end; }
@@ -872,7 +891,7 @@ function Header({ goal, attempts, user, syncState, displayName, setTab, demo, on
         }
         @media (max-width: 640px) {
           .sg-header-main { align-items: center; padding-bottom: 12px; }
-          .sg-logo { height: 36px; }
+          .sg-logo { height: 40px; }
           .sg-tagline { display: none; }
           .sg-scores { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .sg-super-card { grid-column: 1 / -1; }
@@ -1327,10 +1346,13 @@ function AgentBadge() {
       textTransform: "uppercase", letterSpacing: 0.6, color: "#fff", background: C.accent,
       padding: "4px 10px", borderRadius: 20,
     }}>
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M12 2l2.2 6.6L21 11l-6.8 2.4L12 20l-2.2-6.6L3 11l6.8-2.4L12 2z" fill="#fff" />
-      </svg>
-      Agent
+      <style>{`
+        @keyframes sg-agent-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+        .sg-agent-dot { animation: sg-agent-blink 1.6s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) { .sg-agent-dot { animation: none; } }
+      `}</style>
+      <span className="sg-agent-dot" aria-hidden="true" style={{ fontSize: 9, lineHeight: 1 }}>●</span>
+      Adaptive Agent
     </span>
   );
 }
@@ -1359,6 +1381,42 @@ function NextActionCard({ action, setTab, onStartPractice }) {
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20 }}>
         <CardKicker>Next Best Action</CardKicker>
         <p style={{ color: C.ink2, fontSize: 14, margin: "8px 0 0" }}>{action?.reason}</p>
+      </div>
+    );
+  }
+
+  // Fix 3: we have a section score but no skill-level evidence yet — don't
+  // invent a specific weak skill. Offer a short diagnostic on the weaker
+  // section instead, sampling that section's skills at medium difficulty.
+  if (action.kind === "sectionDiagnostic") {
+    const startDiagnostic = () => {
+      onStartPractice?.({
+        section: action.section,
+        diagnostic: true,
+        difficulty: "medium",
+        questionCount: action.questionCount,
+        minutes: action.minutes,
+        reason: action.reason,
+        source: "sectionDiagnostic",
+      });
+    };
+    return (
+      <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 20, display: "flex", flexDirection: "column" }}>
+        <CardKicker>Next Best Action</CardKicker>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "8px 0 4px" }}>
+          <Tag c={action.section === "Math" ? C.accent2 : C.ink2}>{action.section}</Tag>
+          <Tag c={C.accent2}>Diagnostic</Tag>
+        </div>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 21, margin: "2px 0 8px" }}>Run a {action.section} Diagnostic</div>
+        <p style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.55, margin: "0 0 14px" }}>{action.reason}</p>
+        <div style={{ display: "flex", gap: 16, fontSize: 12.5, color: C.ink2, marginBottom: 16, flexWrap: "wrap" }}>
+          <span><b style={{ color: C.ink }}>{action.questionCount}</b> questions</span>
+          <span><b style={{ color: C.ink }}>~{action.minutes}</b> min</span>
+          <span>Starts <b style={{ color: C.ink }}>{action.startDifficulty}</b></span>
+        </div>
+        <button onClick={startDiagnostic} style={{ ...btnPrimary, marginTop: "auto" }}>
+          Start Diagnostic →
+        </button>
       </div>
     );
   }
@@ -1418,6 +1476,7 @@ function MissionCard({ mission, missionCompleted, onToggle, setTab, onStartPract
         minutes: it.minutes,
         reason: it.label,
         source: "mission",
+        missionItemId: it.id,
       });
     } else {
       setTab("mistakes");
@@ -1919,6 +1978,16 @@ function partitionValidity(attempts) {
   const valid = [], invalid = [];
   (attempts || []).forEach((a) => (isValidScoreRecord(a) ? valid : invalid).push(a));
   return { valid, invalid };
+}
+
+// Single source of truth for "which attempts count." Every calculation that
+// reasons about scores (header stats, superscore, gap, the agent's mastery/
+// priority/next-action engine, the AI Planner, Progress/Analytics, readiness)
+// must use this — never the raw attempts array — so validity logic never
+// forks across components. Invalid records are never deleted; they just never
+// influence a recommendation or a number shown outside My Results → Test Scores.
+function getValidAttempts(attempts) {
+  return (attempts || []).filter(isValidScoreRecord);
 }
 
 // Chronological ascending by true test date (never text sort, never creation time).
@@ -2549,7 +2618,7 @@ function TestHistoryBlock({ valid }) {
 
 // ---------- 5. AI PLANNER ----------
 // ---------- 5. AI PLANNER (SAT + Practice tabs, saved history) ----------
-function Planner({ attempts, mistakes, goal, setGoal, plans, setPlans, setTab }) {
+function Planner({ attempts, mistakes, goal, setGoal, plans, setPlans, setTab, mastery, priorities, practiceEvents }) {
   const [sub, setSub] = useState("SAT"); // SAT | Practice
   const [openPlanId, setOpenPlanId] = useState(null);
 
@@ -2604,6 +2673,7 @@ function Planner({ attempts, mistakes, goal, setGoal, plans, setPlans, setTab })
           onNextDate={(v) => setGoal({ ...goal, nextSatDate: v })}
           attempts={attempts} mistakes={mistakes}
           onAddPlan={addPlan} setTab={setTab}
+          mastery={mastery} priorities={priorities} practiceEvents={practiceEvents}
         />
       ) : (
         <PlanPanel
@@ -2616,6 +2686,7 @@ function Planner({ attempts, mistakes, goal, setGoal, plans, setPlans, setTab })
           onNextDate={(v) => setGoal({ ...goal, nextPracticeDate: v })}
           attempts={attempts} mistakes={mistakes}
           onAddPlan={addPlan} setTab={setTab}
+          mastery={mastery} priorities={priorities} practiceEvents={practiceEvents}
         />
       )}
 
@@ -2625,7 +2696,7 @@ function Planner({ attempts, mistakes, goal, setGoal, plans, setPlans, setTab })
   );
 }
 
-function PlanPanel({ kind, latest, supportingLatest, target, onTarget, nextDate, onNextDate, attempts, mistakes, onAddPlan, setTab }) {
+function PlanPanel({ kind, latest, supportingLatest, target, onTarget, nextDate, onNextDate, attempts, mistakes, onAddPlan, setTab, mastery, priorities, practiceEvents }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -2640,7 +2711,17 @@ function PlanPanel({ kind, latest, supportingLatest, target, onTarget, nextDate,
     const pool = isSAT ? mistakes : typeMistakes;
     const skillMap = {};
     pool.forEach((m) => { skillMap[m.skill] = (skillMap[m.skill] || 0) + 1; });
-    const weak = Object.entries(skillMap).sort((a, b) => b[1] - a[1]).slice(0, 3).map((x) => x[0]);
+    const mistakeWeak = Object.entries(skillMap).sort((a, b) => b[1] - a[1]).slice(0, 3).map((x) => x[0]);
+
+    // Fix 7: use the SAME deterministic priority ranking that drives Home and
+    // Practice — never a separate, potentially-contradicting tally — so the
+    // Planner and the Agent always agree on what matters most right now. Fall
+    // back to the mistake tally only when there's no ranked evidence yet.
+    const priorityWeak = (priorities || [])
+      .filter((p) => p.mastery != null || (p.recentMistakes || 0) > 0 || (p.attempts || 0) > 0)
+      .slice(0, 3)
+      .map((p) => p.skill);
+    const weak = priorityWeak.length ? priorityWeak : mistakeWeak;
 
     const sectionMap = { "Reading & Writing": 0, Math: 0 };
     pool.forEach((m) => { if (sectionMap[m.section] != null) sectionMap[m.section]++; });
@@ -2705,15 +2786,41 @@ function PlanPanel({ kind, latest, supportingLatest, target, onTarget, nextDate,
     if (!useAI) { saveAndShow(buildInstant(), "Instant"); return; }
     setLoading(true);
     try {
+      // Server-side Gemini calls require a signed-in SATGene user (Fix 8).
+      // Demo Student mode and any signed-out edge case have no Firebase ID
+      // token — never call the AI endpoint; use the deterministic Instant
+      // plan instead, which always works.
+      const token = await getIdToken();
+      if (!token) {
+        saveAndShow(buildInstant(), "Instant");
+        setError("Sign in to generate an AI-narrated plan. Showing the Instant plan instead.");
+        setLoading(false);
+        return;
+      }
+      // Fix 7: give Gemini the same learner state the deterministic agent uses
+      // elsewhere (mastery, top priorities, recent adaptive-practice results),
+      // so the AI plan explains and expands the agent's ranking rather than
+      // contradicting it. The priority engine itself stays the source of truth.
+      const masterySummary = Object.values(mastery || {})
+        .filter((r) => r && r.mastery != null)
+        .map((r) => ({ section: r.section, skill: r.skill, mastery: r.mastery, status: masteryStatus(r.mastery) }));
+      const prioritySummary = (priorities || []).slice(0, 5).map((p) => ({
+        section: p.section, skill: p.skill, priority: p.priority, mastery: p.mastery, status: p.status,
+      }));
+      const recentPractice = (practiceEvents || []).slice(-20);
+
       const res = await fetch("/api/plan", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           planKind: kind,
           goal: { target, nextDate },
           latest, supportingLatest,
           attempts: attempts.filter((a) => isSAT || a.testType === "Practice"),
           mistakes,
+          mastery: masterySummary,
+          priorities: prioritySummary,
+          recentPractice,
         }),
       });
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || "The AI service is temporarily unavailable. A rule-based plan was saved instead. Please try the AI plan again later."); }
@@ -2898,14 +3005,14 @@ function SavedPlans({ plans, filterKind, openPlanId, setOpenPlanId, onDelete }) 
 }
 
 // ---------- PRACTICE (Adaptive Practice + Full SAT Simulation + Resources) ----------
-function PracticePage({ practiceTab, setPracticeTab, adaptiveLaunch, onConsumeLaunch, agentAction, onPracticeResult }) {
+function PracticePage({ practiceTab, setPracticeTab, adaptiveLaunch, onConsumeLaunch, agentAction, onPracticeResult, mastery, onCompleteMissionItem, setTab }) {
   // If the agent (or the student) launches adaptive practice while on another
   // Practice sub-tab, switch to meet it — one shared launch signal, no duplicate logic.
   useEffect(() => {
     if (adaptiveLaunch) setPracticeTab("adaptive");
   }, [adaptiveLaunch]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const labels = { adaptive: "Adaptive Practice", full: "Full SAT Simulation", resources: "Resources" };
+  const labels = { adaptive: "Adaptive Practice", full: "SAT Timing Simulation Mode", resources: "Resources" };
 
   return (
     <>
@@ -2940,6 +3047,9 @@ function PracticePage({ practiceTab, setPracticeTab, adaptiveLaunch, onConsumeLa
           onConsumeLaunch={onConsumeLaunch}
           agentAction={agentAction}
           onPracticeResult={onPracticeResult}
+          mastery={mastery}
+          onCompleteMissionItem={onCompleteMissionItem}
+          setTab={setTab}
         />
       )}
       {practiceTab === "full" && <FullSimulation />}
@@ -3024,6 +3134,9 @@ function FullSimulation() {
     <>
       {!running ? (
         <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 22 }}>
+          <p style={{ fontSize: 13.5, color: C.ink2, margin: "0 0 16px", lineHeight: 1.55 }}>
+            Practice the timing and module structure of the digital SAT.
+          </p>
           <div style={{ display: "grid", gap: 10, marginBottom: 18 }}>
             {mods.map((m, i) => (
               <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "12px 14px", background: m.adaptive === "break" ? C.soft : C.paper, border: `1px solid ${C.line}`, borderRadius: 10 }}>
@@ -3069,16 +3182,25 @@ function stepDifficulty(diff, correct) {
 }
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
-function AdaptivePractice({ launch, onConsumeLaunch, agentAction, onPracticeResult }) {
+function AdaptivePractice({ launch, onConsumeLaunch, agentAction, onPracticeResult, mastery, onCompleteMissionItem, setTab }) {
   const [session, setSession] = useState(null);
   const consumedRef = useRef(false);
 
   const startSession = (spec) => {
-    const difficulty = spec.difficulty && DIFFICULTY_ORDER.includes(spec.difficulty) ? spec.difficulty : "medium";
-    const q = pickQuestion(spec.skill, difficulty, []);
+    const diagnostic = !!spec.diagnostic;
+    const difficulty = diagnostic
+      ? "medium"
+      : (spec.difficulty && DIFFICULTY_ORDER.includes(spec.difficulty) ? spec.difficulty : "medium");
+    // Diagnostic mode (Fix 3): no single skill is named yet — sample the
+    // section's skills in rotation, one per question, all at medium difficulty.
+    const diagnosticSkills = diagnostic ? (SKILLS[spec.section] || []) : null;
+    const firstSkill = diagnostic ? diagnosticSkills[0] : spec.skill;
+    const q = pickQuestion(firstSkill, difficulty, []);
     setSession({
       section: spec.section,
-      skill: spec.skill,
+      skill: firstSkill,
+      diagnostic,
+      diagnosticSkills,
       reason: spec.reason || null,
       source: spec.source || "manual",
       targetCount: spec.questionCount || 5,
@@ -3088,10 +3210,21 @@ function AdaptivePractice({ launch, onConsumeLaunch, agentAction, onPracticeResu
       qNumber: 1,
       selected: null,
       revealed: false,
+      // Socratic wrong-answer flow state (Fix 1).
+      attemptsOnQuestion: 0,
+      firstAttemptCorrect: null,
+      finalCorrect: null,
+      canShowExplanation: false,
+      guidedMessage: null,
       hintLevel: 0,
       tutor: { loading: false, text: null, error: false },
       correctCount: 0,
       done: false,
+      // Today's Mission auto-completion (Fix 5).
+      missionItemId: spec.missionItemId || null,
+      // Practice-completion mastery before/after (Fix 6) — only meaningful for a
+      // single named skill, never fabricated for diagnostic mode.
+      masteryBefore: !diagnostic ? (mastery?.[spec.skill]?.mastery ?? null) : null,
     });
   };
 
@@ -3110,7 +3243,14 @@ function AdaptivePractice({ launch, onConsumeLaunch, agentAction, onPracticeResu
   }
 
   if (session.done) {
-    return <PracticeSummary session={session} onRestart={() => setSession(null)} />;
+    return (
+      <PracticeSummary
+        session={session}
+        onRestart={() => setSession(null)}
+        mastery={mastery}
+        setTab={setTab}
+      />
+    );
   }
 
   return (
@@ -3119,6 +3259,7 @@ function AdaptivePractice({ launch, onConsumeLaunch, agentAction, onPracticeResu
       setSession={setSession}
       onPracticeResult={onPracticeResult}
       onRestart={() => setSession(null)}
+      onCompleteMissionItem={onCompleteMissionItem}
     />
   );
 }
@@ -3129,6 +3270,7 @@ function PracticePicker({ onStart, agentAction }) {
   const [difficulty, setDifficulty] = useState("medium");
 
   const hasRecommendation = agentAction && agentAction.kind === "practice";
+  const hasDiagnosticRecommendation = agentAction && agentAction.kind === "sectionDiagnostic";
 
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 22 }}>
@@ -3146,6 +3288,25 @@ function PracticePicker({ onStart, agentAction }) {
             style={btnPrimary}
           >
             Practice this →
+          </button>
+        </div>
+      )}
+
+      {hasDiagnosticRecommendation && (
+        <div style={{ background: C.soft, border: `1px solid ${C.line}`, borderRadius: 12, padding: 16, marginBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, color: C.accent, fontWeight: 700, marginBottom: 4 }}>Agent recommendation</div>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>Run a {agentAction.section} Diagnostic</div>
+            <p style={{ fontSize: 12.5, color: C.ink2, margin: "4px 0 0", maxWidth: 420 }}>{agentAction.reason}</p>
+          </div>
+          <button
+            onClick={() => onStart({
+              section: agentAction.section, diagnostic: true, difficulty: "medium",
+              questionCount: agentAction.questionCount, reason: agentAction.reason, source: "sectionDiagnostic",
+            })}
+            style={btnPrimary}
+          >
+            Start Diagnostic →
           </button>
         </div>
       )}
@@ -3178,7 +3339,13 @@ function PracticePicker({ onStart, agentAction }) {
   );
 }
 
-function PracticeQuestion({ session, setSession, onPracticeResult, onRestart }) {
+// How many wrong attempts get a Socratic hint (and no reveal) before "Show
+// Explanation" becomes available. Preserves the student's FIRST-attempt result
+// as the diagnostic signal for mastery/difficulty — repeated guesses never
+// artificially improve mastery, only firstAttemptCorrect does that.
+const MAX_GUIDED_ATTEMPTS = 2;
+
+function PracticeQuestion({ session, setSession, onPracticeResult, onRestart, onCompleteMissionItem }) {
   const q = session.current;
 
   if (!q) {
@@ -3195,16 +3362,67 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart }) 
     setSession((s) => ({ ...s, selected: idx }));
   };
 
+  // FIRST WRONG ATTEMPT: don't reveal the answer — show a guided message and
+  // auto-expose the first hint, then allow reselection. SECOND WRONG ATTEMPT:
+  // a stronger hint, and "Show Explanation" becomes available. Correct at any
+  // point: reveal normally. Exactly one onPracticeResult call happens per
+  // question, at the moment it's finally resolved (correct, or explanation shown).
   const check = () => {
     if (session.selected == null || session.revealed) return;
     const correct = session.selected === q.correctIndex;
-    setSession((s) => ({ ...s, revealed: true, correctCount: s.correctCount + (correct ? 1 : 0) }));
+    const attemptNum = (session.attemptsOnQuestion || 0) + 1;
+    const firstAttemptCorrect = attemptNum === 1 ? correct : session.firstAttemptCorrect;
+
+    if (correct) {
+      setSession((s) => ({
+        ...s,
+        revealed: true,
+        attemptsOnQuestion: attemptNum,
+        firstAttemptCorrect,
+        finalCorrect: true,
+        correctCount: s.correctCount + (firstAttemptCorrect ? 1 : 0),
+      }));
+      onPracticeResult({
+        skill: session.skill,
+        section: session.section,
+        correct: firstAttemptCorrect,
+        difficulty: session.difficulty,
+        date: todayISO(),
+        firstAttemptCorrect,
+        attemptsOnQuestion: attemptNum,
+        finalCorrect: true,
+      });
+      return;
+    }
+
+    setSession((s) => ({
+      ...s,
+      attemptsOnQuestion: attemptNum,
+      firstAttemptCorrect,
+      guidedMessage:
+        attemptNum === 1
+          ? "Not quite. Let's work through it."
+          : attemptNum === MAX_GUIDED_ATTEMPTS
+          ? "Still not quite. Here's another hint."
+          : "Still not quite. You can try again, or show the explanation.",
+      hintLevel: Math.min((s.hintLevel || 0) + 1, 4),
+      canShowExplanation: attemptNum >= MAX_GUIDED_ATTEMPTS,
+    }));
+  };
+
+  // After enough guided attempts, the student can ask to see the answer —
+  // this is the only other point a question resolves and records its result.
+  const showExplanation = () => {
+    setSession((s) => ({ ...s, revealed: true, finalCorrect: false }));
     onPracticeResult({
       skill: session.skill,
       section: session.section,
-      correct,
+      correct: !!session.firstAttemptCorrect,
       difficulty: session.difficulty,
       date: todayISO(),
+      firstAttemptCorrect: !!session.firstAttemptCorrect,
+      attemptsOnQuestion: session.attemptsOnQuestion,
+      finalCorrect: false,
     });
   };
 
@@ -3214,10 +3432,18 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart }) 
 
   const explain = async () => {
     setSession((s) => ({ ...s, tutor: { ...s.tutor, loading: true, error: false } }));
+    // Server-side Gemini calls require a signed-in SATGene user (Fix 8). Demo
+    // Student mode and any signed-out edge case have no Firebase ID token —
+    // skip the network call entirely and go straight to the local explanation.
+    const token = await getIdToken();
+    if (!token) {
+      setSession((s) => ({ ...s, tutor: { loading: false, text: q.explanation, error: true, source: "local" } }));
+      return;
+    }
     try {
       const res = await fetch("/api/tutor", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           section: session.section,
           skill: session.skill,
@@ -3239,14 +3465,23 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart }) 
   };
 
   const advance = () => {
-    const nextDiff = stepDifficulty(session.difficulty, session.selected === q.correctIndex);
+    // Diagnostic-mode sessions are pinned at medium difficulty throughout
+    // (Fix 3); normal sessions step from the FIRST-attempt result (Fix 1).
+    const nextDiff = session.diagnostic ? "medium" : stepDifficulty(session.difficulty, session.firstAttemptCorrect);
     if (session.qNumber >= session.targetCount) {
       setSession((s) => ({ ...s, done: true }));
+      // Close the Today's Mission loop (Fix 5): completing the set this item
+      // launched from marks it done automatically, no manual checkbox needed.
+      if (session.missionItemId) onCompleteMissionItem?.(session.missionItemId);
       return;
     }
-    const nextQ = pickQuestion(session.skill, nextDiff, session.askedIds);
+    const nextSkill = session.diagnostic
+      ? session.diagnosticSkills[session.qNumber % session.diagnosticSkills.length]
+      : session.skill;
+    const nextQ = pickQuestion(nextSkill, nextDiff, session.askedIds);
     setSession((s) => ({
       ...s,
+      skill: nextSkill,
       difficulty: nextDiff,
       askedIds: nextQ ? [...s.askedIds, nextQ.id] : s.askedIds,
       current: nextQ,
@@ -3254,11 +3489,16 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart }) 
       selected: null,
       revealed: false,
       hintLevel: 0,
+      attemptsOnQuestion: 0,
+      firstAttemptCorrect: null,
+      finalCorrect: null,
+      canShowExplanation: false,
+      guidedMessage: null,
       tutor: { loading: false, text: null, error: false },
     }));
   };
 
-  const isCorrect = session.selected === q.correctIndex;
+  const isCorrect = !!session.finalCorrect;
 
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 22 }}>
@@ -3323,6 +3563,12 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart }) 
         )}
       </div>
 
+      {session.guidedMessage && !session.revealed && (
+        <div aria-live="polite" style={{ background: "#FCF4F3", border: "1px solid #E3B7B3", borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 13.5, color: "#B4443A", fontWeight: 600 }}>
+          {session.guidedMessage}
+        </div>
+      )}
+
       {session.hintLevel > 0 && !session.revealed && (
         <div style={{ background: C.soft, borderRadius: 10, padding: 14, marginBottom: 16, display: "grid", gap: 8 }}>
           {q.hints.slice(0, session.hintLevel).map((h, i) => (
@@ -3350,9 +3596,16 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart }) 
       <div className="sg-btn-row" style={{ display: "flex", gap: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
         <button onClick={onRestart} style={btnGhost}>Exit practice</button>
         {!session.revealed ? (
-          <button onClick={check} disabled={session.selected == null} style={{ ...btnPrimary, marginTop: 0, opacity: session.selected == null ? 0.5 : 1 }}>
-            Check answer
-          </button>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {session.canShowExplanation && (
+              <button onClick={showExplanation} style={{ ...btnGhostSolid, marginTop: 0 }}>
+                Show Explanation
+              </button>
+            )}
+            <button onClick={check} disabled={session.selected == null} style={{ ...btnPrimary, marginTop: 0, opacity: session.selected == null ? 0.5 : 1 }}>
+              {(session.attemptsOnQuestion || 0) > 0 ? "Check again" : "Check answer"}
+            </button>
+          </div>
         ) : (
           <button onClick={advance} style={{ ...btnPrimary, marginTop: 0 }}>
             {session.qNumber >= session.targetCount ? "Finish set →" : "Next question →"}
@@ -3363,17 +3616,42 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart }) 
   );
 }
 
-function PracticeSummary({ session, onRestart }) {
+function PracticeSummary({ session, onRestart, mastery, setTab }) {
   const pct = session.targetCount ? Math.round((session.correctCount / session.targetCount) * 100) : 0;
+  // Only show a before/after mastery change when BOTH values are genuinely
+  // calculated from stored evidence — never fabricate one (Fix 6). Diagnostic
+  // sessions span multiple skills, so they never show this row.
+  const masteryAfter = !session.diagnostic ? (mastery?.[session.skill]?.mastery ?? null) : null;
+  const showMasteryChange = !session.diagnostic && session.masteryBefore != null && masteryAfter != null;
+
+  const seeUpdatedRecommendation = () => {
+    onRestart();
+    setTab?.("hub");
+  };
+
   return (
     <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 26, textAlign: "center" }}>
       <div style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.8, color: C.accent, fontWeight: 700, marginBottom: 8 }}>Set complete</div>
       <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 900, fontSize: 40, marginBottom: 4 }}>{session.correctCount}/{session.targetCount}</div>
-      <div style={{ color: C.ink2, fontSize: 14, marginBottom: 18 }}>{pct}% correct on {session.skill} ({session.section})</div>
+      <div style={{ color: C.ink2, fontSize: 14, marginBottom: showMasteryChange ? 10 : 18 }}>
+        {pct}% correct{session.diagnostic ? ` (${session.section} diagnostic)` : ` on ${session.skill} (${session.section})`}
+      </div>
+      {showMasteryChange && (
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: C.soft, border: `1px solid ${C.line}`, borderRadius: 20, padding: "6px 16px", marginBottom: 18, fontSize: 13.5, fontWeight: 700 }}>
+          <span>{session.skill}</span>
+          <span style={{ color: C.ink2, fontWeight: 500 }}>Mastery</span>
+          <span style={{ color: C.ink2 }}>{session.masteryBefore}%</span>
+          <span aria-hidden="true">→</span>
+          <span style={{ color: C.accent }}>{masteryAfter}%</span>
+        </div>
+      )}
       <p style={{ fontSize: 13, color: C.ink2, maxWidth: 440, margin: "0 auto 20px" }}>
-        Your SAT Mastery for {session.skill} just updated on Home based on these results.
+        SATGene has updated your recommendations based on this practice.
       </p>
-      <button onClick={onRestart} style={btnPrimary}>Practice another skill →</button>
+      <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+        <button onClick={seeUpdatedRecommendation} style={btnPrimary}>See Updated Recommendation →</button>
+        <button onClick={onRestart} style={btnGhostSolid}>Practice Another Skill</button>
+      </div>
     </div>
   );
 }
@@ -3388,7 +3666,7 @@ function MorePage({ user, displayName, syncState, profile, setProfile, goal, set
 
   const sections = [
     ["profile", "Profile"],
-    ["settings", "Settings"],
+    ["settings", "SAT Target Settings"],
     ["data", "Data & Privacy"],
     ["help", "Help & User Guide"],
     ["about", "About SATGene"],
@@ -3486,7 +3764,7 @@ function SettingsPanel({ goal, setGoal, syncState }) {
   const set = (k, v) => setGoal({ ...goal, [k]: v });
   return (
     <>
-      <PanelHeading title="Settings" sub="Planning preferences and saved goals. These also appear in the AI Planner." />
+      <PanelHeading title="SAT Target Settings" sub="Planning preferences and saved goals. These also appear in the AI Planner." />
       <PanelCard>
         <div style={{ fontWeight: 700, marginBottom: 10 }}>Planning preferences</div>
         <div className="sg-fields">
@@ -3723,6 +4001,15 @@ function AboutPanel() {
           <b>Score types:</b> an <b>official SAT score</b> comes from a real College Board SAT; a <b>practice-test
           score</b> comes from practice; a <b>target score</b> is your goal; a <b>superscore</b> is a calculated
           combination of your best official SAT section scores.
+        </p>
+      </PanelCard>
+
+      <PanelCard>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>Developed by Ansh Saini</div>
+        <p style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.6, margin: 0 }}>
+          SATGene was developed by Ansh Saini, a high school student, as an independent
+          educational prototype exploring how adaptive analytics and AI can help students
+          make better SAT preparation decisions.
         </p>
       </PanelCard>
 

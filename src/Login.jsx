@@ -97,29 +97,15 @@ export default function Login({ onTryDemo }) {
       <div style={{ width: "100%", maxWidth: 420 }}>
         <div style={{ textAlign: "center", marginBottom: 20 }}>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: "#fff", background: C.accent, padding: "4px 10px", borderRadius: 20, marginBottom: 14 }}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M12 2l2.2 6.6L21 11l-6.8 2.4L12 20l-2.2-6.6L3 11l6.8-2.4L12 2z" fill="#fff" />
-            </svg>
-            Agent
+            <style>{`
+              @keyframes sg-login-agent-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+              .sg-login-agent-dot { animation: sg-login-agent-blink 1.6s ease-in-out infinite; }
+              @media (prefers-reduced-motion: reduce) { .sg-login-agent-dot { animation: none; } }
+            `}</style>
+            <span className="sg-login-agent-dot" aria-hidden="true" style={{ fontSize: 9, lineHeight: 1 }}>●</span>
+            Adaptive Agent
           </div>
           <img src={logo} alt="SATGene" style={{ height: 84, maxWidth: "100%" }} />
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 30, color: C.ink, marginTop: 16, letterSpacing: -0.3, lineHeight: 1.15 }}>
-            Track. Adapt. Score.
-          </div>
-          <div style={{ fontSize: 16, color: C.ink2, marginTop: 8, lineHeight: 1.5, maxWidth: 360, marginInline: "auto" }}>
-            Every result becomes your next best action.
-          </div>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: 6, marginBottom: 20 }} aria-label="How SATGene works">
-          {["Results", "Diagnose", "Practice", "Adapt"].map((step, i, arr) => (
-            <React.Fragment key={step}>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink2, background: C.soft, border: `1px solid ${C.line}`, borderRadius: 20, padding: "5px 11px" }}>
-                {step}
-              </span>
-              {i < arr.length - 1 && <span aria-hidden="true" style={{ color: C.ink2, fontSize: 12 }}>→</span>}
-            </React.Fragment>
-          ))}
         </div>
 
         {onTryDemo && (

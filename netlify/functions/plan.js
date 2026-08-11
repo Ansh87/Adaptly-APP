@@ -9,13 +9,31 @@
 // model (e.g. gemini-2.5-flash-lite or a 3.x model) by changing that variable in
 // Netlify and redeploying, with NO code change.
 //
-// Request body:  { planKind, goal:{target,nextDate}, latest, supportingLatest, attempts, mistakes }
+// Request body:  { planKind, goal:{target,nextDate}, latest, supportingLatest, attempts, mistakes,
+//                  mastery, priorities, recentPractice }
 // Response body: { summary, focus[], week[], practiceSchedule, nextAction }
 //   On upstream failure the frontend falls back to a rule-based plan.
+//   Requires "Authorization: Bearer <Firebase ID token>" — see _verifyAuth.js.
+
+import { verifyRequestAuth } from "./_verifyAuth.js";
 
 export default async (req) => {
   if (req.method !== "POST") {
     return json({ error: "Use POST" }, 405);
+  }
+
+  // Fix 8: never spend a Gemini call for an unauthenticated caller. The UID
+  // itself isn't used below (the plan is built entirely from data the client
+  // already sent), but the verified sign-in gate is the point.
+  let authResult;
+  try {
+    authResult = await verifyRequestAuth(req);
+  } catch (e) {
+    console.error("[plan] Auth verification unavailable:", e?.message || e);
+    return json({ error: "Sign-in verification is not configured on the server." }, 500);
+  }
+  if (!authResult) {
+    return json({ error: "Sign in required." }, 401);
   }
 
   const apiKey = process.env.GEMINI_API_KEY;
@@ -32,7 +50,10 @@ export default async (req) => {
     return json({ error: "Invalid JSON body" }, 400);
   }
 
-  const { planKind = "SAT", goal = {}, latest = null, supportingLatest = null, mistakes = [] } = body;
+  const {
+    planKind = "SAT", goal = {}, latest = null, supportingLatest = null, mistakes = [],
+    mastery = [], priorities = [], recentPractice = [],
+  } = body;
   const isSAT = planKind === "SAT";
   const latestTotal = latest ? (Number(latest.rw) || 0) + (Number(latest.math) || 0) : null;
   const supportTotal = supportingLatest ? (Number(supportingLatest.rw) || 0) + (Number(supportingLatest.math) || 0) : null;
@@ -56,9 +77,14 @@ Logged mistakes (skill, section, reason, type): ${JSON.stringify(
     mistakes.map((m) => ({ skill: m.skill, section: m.section, why: m.why, type: m.testType || "Practice" }))
   )}
 
+Current mastery per skill, from direct adaptive-practice evidence only (skills not listed have no direct evidence yet, so treat them as unassessed — never assume a number for them): ${JSON.stringify(mastery)}
+SATGene's own deterministic priority ranking, most urgent first (this is the source of truth for what matters most right now — your job is to EXPLAIN and EXPAND on this ranking with a narrative plan, not to re-rank or override it): ${JSON.stringify(priorities)}
+Most recent adaptive-practice results (up to 20, chronological): ${JSON.stringify(recentPractice)}
+
 ${isSAT
   ? "Both SAT and practice mistakes may inform this plan. If there is no official SAT score, say so clearly and treat any practice score as a baseline only."
   : "Prioritize recent practice-test mistakes. Focus on what to do before the next practice test."}
+Your "focus" list should draw from the priority ranking above (highest-priority skills first), not invent a different ordering.
 
 Respond with ONLY a JSON object, no markdown or code fences, exactly:
 {

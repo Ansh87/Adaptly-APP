@@ -96,6 +96,20 @@ export const watchAuth = (cb) => {
 };
 export const resetPassword = (email) => (auth ? sendPasswordResetEmail(auth, email) : notConfiguredError());
 
+// Fresh Firebase ID token for the current signed-in user, or null if nobody is
+// signed in (Demo Student mode included — demo never calls real Firebase auth,
+// so auth.currentUser is always null there). Frontend calls to /api/plan and
+// /api/tutor attach this as "Authorization: Bearer <token>" so those server
+// functions can verify a real SATGene sign-in before spending a Gemini call.
+export async function getIdToken() {
+  if (!auth || !auth.currentUser) return null;
+  try {
+    return await auth.currentUser.getIdToken();
+  } catch {
+    return null;
+  }
+}
+
 // --- Firestore per-user data ---
 // Each user's SATGene data lives at users/{uid}. Security rules restrict access
 // so a signed-in user can only read/write their own document.
