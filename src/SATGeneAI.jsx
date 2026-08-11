@@ -483,7 +483,7 @@ export default function SATGeneAI() {
     return (
       <div style={{ minHeight: "100vh", background: C.paper, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: FONT_BODY, color: C.ink2 }}>
         <div style={{ textAlign: "center" }}>
-          <img src={logo} alt="SATGene" style={{ height: 40, width: "auto" }} />
+          <img src={logo} alt="SATGene" style={{ height: 56, width: "auto" }} />
           <div style={{ marginTop: 10, fontSize: 14 }}>Loading…</div>
         </div>
       </div>
@@ -855,7 +855,7 @@ function Header({ goal, attempts, user, syncState, displayName, setTab, demo, on
 
         /* Main header row: logo left, scores right, tight vertical spacing */
         .sg-header-main { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding-top: 6px; padding-bottom: 12px; }
-        .sg-logo { height: 32px; width: auto; max-width: 100%; }
+        .sg-logo { height: 46px; width: auto; max-width: 100%; }
         .sg-tagline { font-size: 13px; color: ${C.ink2}; margin-top: 3px; }
 
         /* Content-sized score cards via flexible auto-fit grid */
@@ -872,7 +872,7 @@ function Header({ goal, attempts, user, syncState, displayName, setTab, demo, on
         }
         @media (max-width: 640px) {
           .sg-header-main { align-items: center; padding-bottom: 12px; }
-          .sg-logo { height: 26px; }
+          .sg-logo { height: 36px; }
           .sg-tagline { display: none; }
           .sg-scores { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .sg-super-card { grid-column: 1 / -1; }

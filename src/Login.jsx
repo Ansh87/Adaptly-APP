@@ -102,11 +102,11 @@ export default function Login({ onTryDemo }) {
             </svg>
             Agent
           </div>
-          <img src={logo} alt="SATGene" style={{ height: 52, maxWidth: "100%" }} />
-          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 20, color: C.ink, marginTop: 12, letterSpacing: -0.2 }}>
+          <img src={logo} alt="SATGene" style={{ height: 84, maxWidth: "100%" }} />
+          <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 800, fontSize: 30, color: C.ink, marginTop: 16, letterSpacing: -0.3, lineHeight: 1.15 }}>
             Track. Adapt. Score.
           </div>
-          <div style={{ fontSize: 14, color: C.ink2, marginTop: 8, lineHeight: 1.5, maxWidth: 360, marginInline: "auto" }}>
+          <div style={{ fontSize: 16, color: C.ink2, marginTop: 8, lineHeight: 1.5, maxWidth: 360, marginInline: "auto" }}>
             Every result becomes your next best action.
           </div>
         </div>
