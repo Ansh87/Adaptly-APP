@@ -23,25 +23,37 @@ SATGene follows one loop: **Results, Diagnose, Practice, Measure, Adapt.**
    turns that evidence into a mastery score (0 to 100, or "Not assessed" until there's
    real evidence) for each of 8 SAT skill areas, then ranks them with a weighted
    priority formula: mastery weakness, recent mistakes, incorrect-answer rate,
-   confidence, recency, and time pressure to the test date.
+   confidence, recency, and time pressure to the test date. If a student only has a
+   section-level test score and no skill-level evidence yet, the agent refuses to
+   guess which specific skill is weak, it recommends a short diagnostic on the weaker
+   section instead, so it never fabricates a weakness from a broad number.
 3. **Decide.** The top-ranked skill becomes the **Next Best Action**, a specific
    recommendation with a data-grounded reason ("2 of your last 2 Math mistakes were
    in Advanced Math"), not a generic suggestion.
-4. **Practice.** The student practices that exact skill in an adaptive question set
-   (original, SATGene-authored questions, never copied from College Board or any
-   vendor) that gets harder or easier based on each answer. When they're stuck, a
-   4-level Socratic "Guide Me" walks them toward the answer without just giving it
-   away; an "Explain differently" option calls an AI tutor for a second explanation,
-   with an instant, non-AI fallback if that call fails.
-5. **Measure and adapt.** Every answer updates mastery immediately. The next time the
-   student opens the app, the agent has already re-diagnosed on its own: "SATGene
-   Noticed" surfaces what changed, and "Why did my plan change?" explains the new
-   priority in plain language. Nothing here requires the student to press "regenerate."
+4. **Practice, Socratically.** The student practices that exact skill in an adaptive
+   question set (original, SATGene-authored questions, never copied from College Board
+   or any vendor) that gets harder or easier based on each answer. A wrong answer
+   doesn't just reveal the correct one: SATGene says "Not quite, let's work through
+   it," surfaces a hint, and lets the student try again; a second miss brings a
+   stronger hint and the option to see the full explanation. The student's *first*
+   attempt is always what counts toward mastery, so guided retries help them learn
+   without inflating their score. An "Explain differently" option calls an AI tutor
+   for a second explanation once the answer is revealed, with an instant, non-AI
+   fallback if that call fails.
+5. **Measure and adapt.** Every answer updates mastery immediately, and finishing a
+   practice set launched from Today's Mission automatically checks that item off, no
+   extra click needed. The next time the student opens the app, the agent has already
+   re-diagnosed on its own: "SATGene Noticed" surfaces what changed, and "Why did my
+   plan change?" explains the new priority in plain language. The AI Study Planner
+   reads that same mastery and priority state, so it never contradicts what the
+   student sees on Home. Nothing here requires the student to press "regenerate."
 
 This is deliberately not a chatbot. A chatbot answers what it's asked. SATGene decides
 what to work on without being asked, and the decision is grounded in the student's own
 logged evidence, never invented. A skill with no direct practice evidence stays labeled
-"Not assessed" rather than showing a fabricated percentage.
+"Not assessed" rather than showing a fabricated percentage, and the two optional Gemini
+endpoints (plan narration, AI tutor) require a verified, signed-in SATGene account, so
+they can't be spent by an anonymous script.
 
 ## Impact for underserved schools
 

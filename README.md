@@ -1,6 +1,6 @@
-# SATGene: Track. Adapt. Score.
+# SATGene: Track. Learn. Adapt. Score.
 
-Every result becomes your next best action.
+Every Result Shapes Your Next Move.
 
 **Live demo:** https://satgene.netlify.app/ (click "Try Demo Student" to explore instantly. No account, no setup, sample data only.)
 
