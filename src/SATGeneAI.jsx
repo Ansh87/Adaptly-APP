@@ -876,7 +876,7 @@ function Header({ goal, attempts, user, syncState, displayName, setTab, demo, on
         .sg-header-main { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding-top: 6px; padding-bottom: 12px; }
         .sg-logo { height: 54px; width: auto; max-width: 100%; }
         .sg-tagline { font-size: 15px; font-weight: 600; font-family: ${FONT_DISPLAY}; color: ${C.ink}; margin-top: 4px; letter-spacing: -0.1px; }
-        .sg-subtagline { font-size: 12px; font-weight: 500; font-family: ${FONT_BODY}; color: ${C.ink2}; margin-top: 2px; letter-spacing: -0.05px; }
+        .sg-subtagline { display: inline-block; font-size: 12px; font-weight: 500; font-family: ${FONT_BODY}; color: #ffffff; background: #000000; padding: 2px 8px; border-radius: 3px; margin-top: 4px; letter-spacing: -0.05px; }
 
         /* Content-sized score cards via flexible auto-fit grid */
         .sg-scores { display: grid; grid-auto-flow: column; grid-auto-columns: max-content; gap: 10px; justify-content: end; }
@@ -893,7 +893,6 @@ function Header({ goal, attempts, user, syncState, displayName, setTab, demo, on
         @media (max-width: 640px) {
           .sg-header-main { align-items: center; padding-bottom: 12px; }
           .sg-logo { height: 40px; }
-          .sg-tagline { display: none; }
           .sg-subtagline { display: none; }
           .sg-scores { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .sg-super-card { grid-column: 1 / -1; }
