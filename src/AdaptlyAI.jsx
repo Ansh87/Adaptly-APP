@@ -2923,13 +2923,9 @@ function AdaptivePractice({ launch, onConsumeLaunch, agentAction, onPracticeResu
       qNumber: 1,
       selected: null,
       revealed: false,
-      // Socratic wrong-answer flow state (Fix 1).
       attemptsOnQuestion: 0,
       firstAttemptCorrect: null,
       finalCorrect: null,
-      canShowExplanation: false,
-      guidedMessage: null,
-      hintLevel: 0,
       tutor: { loading: false, text: null, error: false },
       correctCount: 0,
       done: false,
@@ -3052,12 +3048,6 @@ function PracticePicker({ onStart, agentAction }) {
   );
 }
 
-// How many wrong attempts get a Socratic hint (and no reveal) before "Show
-// Explanation" becomes available. Preserves the student's FIRST-attempt result
-// as the diagnostic signal for mastery/difficulty — repeated guesses never
-// artificially improve mastery, only firstAttemptCorrect does that.
-const MAX_GUIDED_ATTEMPTS = 2;
-
 function PracticeQuestion({ session, setSession, onPracticeResult, onRestart, onCompleteMissionItem }) {
   const q = session.current;
 
@@ -3075,72 +3065,30 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart, on
     setSession((s) => ({ ...s, selected: idx }));
   };
 
-  // FIRST WRONG ATTEMPT: don't reveal the answer — show a guided message and
-  // auto-expose the first hint, then allow reselection. SECOND WRONG ATTEMPT:
-  // a stronger hint, and "Show Explanation" becomes available. Correct at any
-  // point: reveal normally. Exactly one onPracticeResult call happens per
-  // question, at the moment it's finally resolved (correct, or explanation shown).
+  // One attempt per question: checking resolves it immediately, right or wrong,
+  // and records exactly one onPracticeResult. After a wrong answer the student
+  // can ask the AI tutor for an explanation.
   const check = () => {
     if (session.selected == null || session.revealed) return;
     const correct = session.selected === q.correctIndex;
-    const attemptNum = (session.attemptsOnQuestion || 0) + 1;
-    const firstAttemptCorrect = attemptNum === 1 ? correct : session.firstAttemptCorrect;
-
-    if (correct) {
-      setSession((s) => ({
-        ...s,
-        revealed: true,
-        attemptsOnQuestion: attemptNum,
-        firstAttemptCorrect,
-        finalCorrect: true,
-        correctCount: s.correctCount + (firstAttemptCorrect ? 1 : 0),
-      }));
-      onPracticeResult({
-        skill: session.skill,
-        section: session.section,
-        correct: firstAttemptCorrect,
-        difficulty: session.difficulty,
-        date: todayISO(),
-        firstAttemptCorrect,
-        attemptsOnQuestion: attemptNum,
-        finalCorrect: true,
-      });
-      return;
-    }
-
     setSession((s) => ({
       ...s,
-      attemptsOnQuestion: attemptNum,
-      firstAttemptCorrect,
-      guidedMessage:
-        attemptNum === 1
-          ? "Not quite. Let's work through it."
-          : attemptNum === MAX_GUIDED_ATTEMPTS
-          ? "Still not quite. Here's another hint."
-          : "Still not quite. You can try again, or show the explanation.",
-      hintLevel: Math.min((s.hintLevel || 0) + 1, 4),
-      canShowExplanation: attemptNum >= MAX_GUIDED_ATTEMPTS,
+      revealed: true,
+      attemptsOnQuestion: 1,
+      firstAttemptCorrect: correct,
+      finalCorrect: correct,
+      correctCount: s.correctCount + (correct ? 1 : 0),
     }));
-  };
-
-  // After enough guided attempts, the student can ask to see the answer —
-  // this is the only other point a question resolves and records its result.
-  const showExplanation = () => {
-    setSession((s) => ({ ...s, revealed: true, finalCorrect: false }));
     onPracticeResult({
       skill: session.skill,
       section: session.section,
-      correct: !!session.firstAttemptCorrect,
+      correct,
       difficulty: session.difficulty,
       date: todayISO(),
-      firstAttemptCorrect: !!session.firstAttemptCorrect,
-      attemptsOnQuestion: session.attemptsOnQuestion,
-      finalCorrect: false,
+      firstAttemptCorrect: correct,
+      attemptsOnQuestion: 1,
+      finalCorrect: correct,
     });
-  };
-
-  const guideMe = () => {
-    setSession((s) => ({ ...s, hintLevel: Math.min((s.hintLevel || 0) + 1, 4) }));
   };
 
   const explain = async () => {
@@ -3200,12 +3148,9 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart, on
       qNumber: s.qNumber + 1,
       selected: null,
       revealed: false,
-      hintLevel: 0,
       attemptsOnQuestion: 0,
       firstAttemptCorrect: null,
       finalCorrect: null,
-      canShowExplanation: false,
-      guidedMessage: null,
       tutor: { loading: false, text: null, error: false },
     }));
   };
@@ -3256,47 +3201,20 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart, on
         })}
       </div>
 
-      {/* Socratic tutor: Guide Me (instant, local) + Explain (AI, with instant fallback) */}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-        {!session.revealed && (
-          <button
-            onClick={guideMe}
-            disabled={session.hintLevel >= 4}
-            title={session.hintLevel >= 4 ? "All 4 hints shown" : "Reveal the next hint"}
-            style={{ ...btnGhostSolid, marginTop: 0, opacity: session.hintLevel >= 4 ? 0.5 : 1 }}
-          >
-            {session.hintLevel === 0 ? "Guide Me" : `Guide Me (${session.hintLevel}/4)`}
-          </button>
-        )}
-        {session.revealed && (
-          <button onClick={explain} disabled={session.tutor.loading} style={{ ...btnGhostSolid, marginTop: 0 }}>
-            {session.tutor.loading ? "Asking the AI tutor…" : "Explain differently (AI)"}
-          </button>
-        )}
-      </div>
-
-      {session.guidedMessage && !session.revealed && (
-        <div aria-live="polite" style={{ background: "#FCF4F3", border: "1px solid #E3B7B3", borderRadius: 10, padding: "10px 14px", marginBottom: 12, fontSize: 13.5, color: "#B4443A", fontWeight: 600 }}>
-          {session.guidedMessage}
-        </div>
-      )}
-
-      {session.hintLevel > 0 && !session.revealed && (
-        <div style={{ background: C.soft, borderRadius: 10, padding: 14, marginBottom: 16, display: "grid", gap: 8 }}>
-          {q.hints.slice(0, session.hintLevel).map((h, i) => (
-            <div key={i} style={{ fontSize: 13.5, color: C.ink2 }}><b style={{ color: C.ink }}>Hint {i + 1}:</b> {h}</div>
-          ))}
-        </div>
-      )}
-
       {session.revealed && (
         <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 16, marginBottom: 16 }}>
           <div aria-live="polite" style={{ fontWeight: 700, color: isCorrect ? C.accent : "#B4443A", marginBottom: 8, fontSize: 14.5 }}>
             {isCorrect ? "✓ Correct" : `✗ Not quite. The correct answer is ${String.fromCharCode(65 + q.correctIndex)}`}
           </div>
-          <div style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.6 }}>
-            {session.tutor.text || q.explanation}
-          </div>
+          {session.tutor.text ? (
+            <div style={{ fontSize: 13.5, color: C.ink2, lineHeight: 1.6 }}>
+              {session.tutor.text}
+            </div>
+          ) : (
+            <button onClick={explain} disabled={session.tutor.loading} style={{ ...btnGhostSolid, marginTop: 4 }}>
+              {session.tutor.loading ? "Asking the AI tutor…" : "Ask AI Tutor"}
+            </button>
+          )}
           {session.tutor.source === "local" && session.tutor.error && (
             <div style={{ fontSize: 11.5, color: C.ink2, marginTop: 8, fontStyle: "italic" }}>
               Showing the instant explanation. The AI tutor is unavailable right now.
@@ -3308,16 +3226,9 @@ function PracticeQuestion({ session, setSession, onPracticeResult, onRestart, on
       <div className="sg-btn-row" style={{ display: "flex", gap: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
         <button onClick={onRestart} style={btnGhost}>Exit practice</button>
         {!session.revealed ? (
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            {session.canShowExplanation && (
-              <button onClick={showExplanation} style={{ ...btnGhostSolid, marginTop: 0 }}>
-                Show Explanation
-              </button>
-            )}
-            <button onClick={check} disabled={session.selected == null} style={{ ...btnPrimary, marginTop: 0, opacity: session.selected == null ? 0.5 : 1 }}>
-              {(session.attemptsOnQuestion || 0) > 0 ? "Check again" : "Check answer"}
-            </button>
-          </div>
+          <button onClick={check} disabled={session.selected == null} style={{ ...btnPrimary, marginTop: 0, opacity: session.selected == null ? 0.5 : 1 }}>
+            Check answer
+          </button>
         ) : (
           <button onClick={advance} style={{ ...btnPrimary, marginTop: 0 }}>
             {session.qNumber >= session.targetCount ? "Finish set →" : "Next question →"}
