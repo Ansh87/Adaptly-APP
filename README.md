@@ -1,65 +1,65 @@
-# SATGene: Track. Learn. Adapt. Score.
+# Adaptly: Track. Learn. Adapt. Score.
 
 Every Result Shapes Your Next Move.
 
-**Live demo:** https://satgene.netlify.app/ (click "Try Demo Student" to explore instantly. No account, no setup, sample data only.)
+**Live demo:** https://adaptly.netlify.app/ (click "Try Demo Student" to explore instantly. No account, no setup, sample data only.)
 
-SATGene is not a chatbot bolted onto a study app. It's a deterministic agent that
+Adaptly is not a chatbot bolted onto a study app. It's an AI-powered agent that
 watches a student's real evidence, SAT scores, practice scores, and logged
 mistakes, and decides on its own what they should work on next. It then guides
 them through that practice, measures the result, and re-decides automatically the
 next time it sees new evidence. No student ever has to ask it what to do.
 
 ```
-MY RESULTS  →  SATGENE AGENT  →  HOME              →  PRACTICE            →  PROGRESS
+MY RESULTS  →  ADAPTLY AGENT  →  HOME              →  PRACTICE            →  PROGRESS
 scores +        analyzes           picks Next Best      adaptive Qs +          measures
 mistakes        mastery/weakness   Action + Mission      Socratic tutor         improvement
                                                                                       ↓
-                                                                            SATGENE AGENT
+                                                                            ADAPTLY AGENT
                                                                          updates mastery,
                                                                          repeats the loop
 ```
 
 ## Why this counts as an agent, not a chatbot
 
-Everything below runs with **zero AI calls**. It's plain, deterministic, unit-testable
-logic in [`src/agent.js`](src/agent.js). That's the point: the agent's judgment doesn't
-depend on an API being up, a key being funded, or a model being available.
+The agent observes, diagnoses, decides, and acts on the student's behalf — the
+student never has to ask it what to do.
 
 - **Mastery model.** Every skill starts "Not assessed." A percentage only appears once
   there's direct evidence (an adaptive-practice attempt on that specific skill). A single
   section test score is never used to invent a per-skill number.
 - **Priority engine.** A weighted score per skill (mastery weakness, recent mistakes,
   incorrect-answer rate, low confidence, recency, time pressure to the SAT date) ranks
-  what matters most right now.
+  what matters most right now ([`src/agent.js`](src/agent.js)).
 - **Next Best Action.** The top-priority skill becomes a concrete recommendation with a
   data-grounded reason ("2 of your last 2 Math mistakes were in Advanced Math"), a
   question count, a time estimate, and a starting difficulty.
 - **Today's Mission.** 2 to 4 bite-sized actions pulled from the same priorities.
 - **Auto-reassessment.** Every time new evidence lands (a score, a mistake, a practice
   answer), the agent recomputes mastery and priorities on its own and surfaces what
-  changed: "SATGene Noticed" and "Why did my plan change?" No button press required.
-
-AI (Google Gemini) is used in exactly two optional, server-side spots: generating a
-richer study plan narrative, and the "Explain differently" tutor step. Both have a
-built-in non-AI fallback ("Instant Plan," the local hint/explanation bank) so the app
-**never breaks and never requires an API key to function.**
+  changed: "Adaptly Noticed" and "Why did my plan change?" No button press required.
+- **AI Study Planner.** The agent hands its live priority ranking, mastery map, and
+  recent practice evidence to Google Gemini (server-side), which writes the student's
+  full study plan: summary, focus areas, weekly tasks, practice-test schedule, and the
+  recommended next action. The same AI powers the tutor's "Explain differently" step
+  during practice.
 
 ## What's inside
 
 | Area | What it does |
 |---|---|
-| **Home** | The agent dashboard: Next Best Action, Today's Mission, SATGene Noticed, a mastery snapshot, and the active study plan. |
+| **Home** | The agent dashboard: Next Best Action, Today's Mission, Adaptly Noticed, a mastery snapshot, and the active study plan. |
+| **Planning** | The AI Study Planner: Gemini writes SAT and practice-test study plans from the agent's live priority ranking, mastery map, and recent results. |
 | **My Results** | Log official SAT scores, practice scores, and mistakes, the evidence the agent reasons over. Section scores are validated to 200 to 800; totals are always derived. |
-| **Practice** | Agent-directed adaptive practice (original question bank, difficulty adjusts per answer, 4-level Socratic "Guide Me" hints, AI "Explain differently" with instant fallback), a full-length timed SAT-structure simulation, and links to trusted official/paid SAT resources. |
+| **Practice** | Agent-directed adaptive practice (original question bank, difficulty adjusts per answer, 4-level Socratic "Guide Me" hints, AI "Explain differently"), a full-length timed SAT-structure simulation, and links to trusted official/paid SAT resources. |
 | **Progress** | Score and section trends, the full mastery model, SAT readiness, and recommended next steps. Answers "am I improving?" |
-| **More** | Profile, settings, data export/import/delete, help guide, and a Demo Student mode that runs entirely on local sample data and never touches a real account. |
+| **Settings** (gear icon, top right) | Profile, settings, data export/import/delete, help guide, and a Demo Student mode that runs entirely on local sample data and never touches a real account. |
 
 ## Why it matters for underserved students
 
-- **Costs nothing to run.** The Instant fallback means a school with no AI budget still
-  gets a working adaptive tutor. The agent's core decisions never depend on a paid API.
-- **No paywall.** Practice content is either original (SATGene's own question bank) or
+- **Free for students.** Adaptly charges nothing — every feature, including the AI
+  Study Planner and AI tutor, is available to any student with an account.
+- **No paywall.** Practice content is either original (Adaptly's own question bank) or
   links straight to free official resources (Bluebook, the Student Question Bank, Khan
   Academy), never a proprietary content lock-in.
 - **No barrier to try it.** Demo Student mode gives any student (or judge) the full
@@ -84,7 +84,7 @@ npm install
 npm run dev      # http://localhost:5173
 ```
 
-Edit `src/SATGeneAI.jsx` (UI) or `src/agent.js` (agent logic) and it hot-reloads.
+Edit `src/AdaptlyAI.jsx` (UI) or `src/agent.js` (agent logic) and it hot-reloads.
 
 ```bash
 npm run build     # production build, outputs to dist/
@@ -105,10 +105,9 @@ npm run preview   # serve the build locally
 Without Firebase configured, the app still runs. Real sign-in is disabled with a clear
 message, and Demo Student mode works fully offline.
 
-### Gemini (optional: AI plan text + tutor explanations)
+### Gemini (AI study plans + tutor explanations)
 
-The app works completely without this; it only enables the two AI-enhanced touches
-described above.
+Required for the AI Study Planner and the tutor's "Explain differently" step.
 
 1. Get a key at https://aistudio.google.com/apikey.
 2. Add `GEMINI_API_KEY` in Netlify → Site settings → Environment variables (never commit
