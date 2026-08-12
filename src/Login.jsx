@@ -96,7 +96,7 @@ export default function Login({ onTryDemo }) {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Inter:wght@400;500;600;700&display=swap');`}</style>
       <div style={{ width: "100%", maxWidth: 420 }}>
         <div style={{ textAlign: "center", marginBottom: 20 }}>
-          <img src={logo} alt="Adaptly" style={{ height: 84, maxWidth: "100%" }} />
+          <img src={logo} alt="Adaptly" style={{ height: 128, maxWidth: "100%" }} />
         </div>
 
         {onTryDemo && (
