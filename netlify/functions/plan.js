@@ -12,7 +12,7 @@
 // Request body:  { planKind, goal:{target,nextDate}, latest, supportingLatest, attempts, mistakes,
 //                  mastery, priorities, recentPractice }
 // Response body: { summary, focus[], week[], practiceSchedule, nextAction }
-//   On upstream failure the frontend falls back to a rule-based plan.
+//   On upstream failure the frontend shows the error and the student retries.
 //   Requires "Authorization: Bearer <Firebase ID token>" — see _verifyAuth.js.
 
 import { verifyRequestAuth } from "./_verifyAuth.js";
@@ -22,17 +22,29 @@ export default async (req) => {
     return json({ error: "Use POST" }, 405);
   }
 
-  // Fix 8: never spend a Gemini call for an unauthenticated caller. The UID
-  // itself isn't used below (the plan is built entirely from data the client
-  // already sent), but the verified sign-in gate is the point.
-  let authResult;
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400);
+  }
+
+  // Fix 8: never spend a Gemini call for an unauthenticated caller — except
+  // Demo Student mode, which is allowed so the full experience (including AI
+  // plans) works without an account. NOTE: the demo flag is client-supplied,
+  // so this effectively opens the endpoint to anonymous callers; re-lock it
+  // (or rate-limit demo calls) before a public launch.
+  let authResult = null;
+  let authError = null;
   try {
     authResult = await verifyRequestAuth(req);
   } catch (e) {
+    authError = e;
     console.error("[plan] Auth verification unavailable:", e?.message || e);
-    return json({ error: "Sign-in verification is not configured on the server." }, 500);
   }
-  if (!authResult) {
+  const isDemo = body?.demo === true;
+  if (!authResult && !isDemo) {
+    if (authError) return json({ error: "Sign-in verification is not configured on the server." }, 500);
     return json({ error: "Sign in required." }, 401);
   }
 
@@ -41,13 +53,6 @@ export default async (req) => {
     // Never log the key; this branch means it's simply absent.
     console.error("[plan] GEMINI_API_KEY is not set on the server");
     return json({ error: "AI service is not configured." }, 500);
-  }
-
-  let body;
-  try {
-    body = await req.json();
-  } catch {
-    return json({ error: "Invalid JSON body" }, 400);
   }
 
   const {
@@ -78,7 +83,7 @@ Logged mistakes (skill, section, reason, type): ${JSON.stringify(
   )}
 
 Current mastery per skill, from direct adaptive-practice evidence only (skills not listed have no direct evidence yet, so treat them as unassessed — never assume a number for them): ${JSON.stringify(mastery)}
-SATGene's own deterministic priority ranking, most urgent first (this is the source of truth for what matters most right now — your job is to EXPLAIN and EXPAND on this ranking with a narrative plan, not to re-rank or override it): ${JSON.stringify(priorities)}
+Adaptly's own priority ranking, most urgent first (this is the source of truth for what matters most right now — your job is to EXPLAIN and EXPAND on this ranking with a narrative plan, not to re-rank or override it): ${JSON.stringify(priorities)}
 Most recent adaptive-practice results (up to 20, chronological): ${JSON.stringify(recentPractice)}
 
 ${isSAT
@@ -113,7 +118,7 @@ Respond with ONLY a JSON object, no markdown or code fences, exactly:
     });
   } catch (e) {
     console.error(`[plan] Network error reaching Gemini (model=${model}):`, e?.message || e);
-    return json({ error: "The AI service could not be reached. A rule-based plan was saved instead." }, 502);
+    return json({ error: "The AI service could not be reached." }, 502);
   }
 
   if (!aiRes.ok) {
@@ -126,16 +131,16 @@ Respond with ONLY a JSON object, no markdown or code fences, exactly:
     // Model retired / not found: make the model name obvious in the server log.
     if (aiRes.status === 404 || /not\s*found|no longer available|is not supported|deprecated|retired/i.test(rawDetail)) {
       console.error(`[plan] MODEL UNAVAILABLE — the configured model "${model}" may be retired or unsupported. Update the GEMINI_MODEL env var to a current model and redeploy.`);
-      return json({ error: "The AI model is currently unavailable. A rule-based plan was saved instead." }, 502);
+      return json({ error: "The AI model is currently unavailable." }, 502);
     }
 
     // Rate limit / quota.
     if (aiRes.status === 429) {
-      return json({ error: "The AI service is temporarily unavailable. A rule-based plan was saved instead. Please try the AI plan again later." }, 429);
+      return json({ error: "The AI service is temporarily unavailable. Please try again in a few minutes." }, 429);
     }
 
     // Any other upstream error: generic user-facing message, details stay in the log.
-    return json({ error: "The AI service returned an error. A rule-based plan was saved instead." }, 502);
+    return json({ error: "The AI service returned an error." }, 502);
   }
 
   let data;
@@ -143,7 +148,7 @@ Respond with ONLY a JSON object, no markdown or code fences, exactly:
     data = await aiRes.json();
   } catch {
     console.error(`[plan] Gemini returned unreadable data (model=${model})`);
-    return json({ error: "The AI service returned unreadable data. A rule-based plan was saved instead." }, 502);
+    return json({ error: "The AI service returned unreadable data." }, 502);
   }
 
   const text =
@@ -155,7 +160,7 @@ Respond with ONLY a JSON object, no markdown or code fences, exactly:
     plan = JSON.parse(clean);
   } catch {
     console.error(`[plan] Gemini did not return valid JSON (model=${model})`);
-    return json({ error: "The AI service returned an unexpected format. A rule-based plan was saved instead." }, 502);
+    return json({ error: "The AI service returned an unexpected format." }, 502);
   }
 
   // Basic shape guard so the frontend never crashes.
