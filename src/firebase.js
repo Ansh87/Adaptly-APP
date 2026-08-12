@@ -1,4 +1,4 @@
-// Firebase client setup for SATGene.
+// Firebase client setup for Adaptly.
 // These values are NOT secrets — Firebase web config is meant to be public.
 // Real security comes from Firestore Security Rules (see firestore.rules) and
 // from enabling only the sign-in methods you want in the Firebase console.
@@ -100,7 +100,7 @@ export const resetPassword = (email) => (auth ? sendPasswordResetEmail(auth, ema
 // signed in (Demo Student mode included — demo never calls real Firebase auth,
 // so auth.currentUser is always null there). Frontend calls to /api/plan and
 // /api/tutor attach this as "Authorization: Bearer <token>" so those server
-// functions can verify a real SATGene sign-in before spending a Gemini call.
+// functions can verify a real Adaptly sign-in before spending a Gemini call.
 export async function getIdToken() {
   if (!auth || !auth.currentUser) return null;
   try {
@@ -111,7 +111,7 @@ export async function getIdToken() {
 }
 
 // --- Firestore per-user data ---
-// Each user's SATGene data lives at users/{uid}. Security rules restrict access
+// Each user's Adaptly data lives at users/{uid}. Security rules restrict access
 // so a signed-in user can only read/write their own document.
 export async function loadUserData(uid) {
   if (!db) return null;

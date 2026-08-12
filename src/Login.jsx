@@ -6,7 +6,7 @@ import {
   resetPassword,
   firebaseReady,
 } from "./firebase";
-import logo from "./assets/satgene-logo.png";
+import logo from "./assets/adaptly-logo.png";
 
 // Shared look tokens (kept local so Login is self-contained)
 const C = {
@@ -96,16 +96,7 @@ export default function Login({ onTryDemo }) {
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=Inter:wght@400;500;600;700&display=swap');`}</style>
       <div style={{ width: "100%", maxWidth: 420 }}>
         <div style={{ textAlign: "center", marginBottom: 20 }}>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: "#fff", background: C.accent, padding: "4px 10px", borderRadius: 20, marginBottom: 14 }}>
-            <style>{`
-              @keyframes sg-login-agent-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
-              .sg-login-agent-dot { animation: sg-login-agent-blink 1.6s ease-in-out infinite; }
-              @media (prefers-reduced-motion: reduce) { .sg-login-agent-dot { animation: none; } }
-            `}</style>
-            <span className="sg-login-agent-dot" aria-hidden="true" style={{ fontSize: 9, lineHeight: 1 }}>●</span>
-            Adaptive Agent
-          </div>
-          <img src={logo} alt="SATGene" style={{ height: 84, maxWidth: "100%" }} />
+          <img src={logo} alt="Adaptly" style={{ height: 84, maxWidth: "100%" }} />
         </div>
 
         {onTryDemo && (

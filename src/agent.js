@@ -1,9 +1,9 @@
 // ============================================================
-// SATGene Agent Engine — deterministic, AI-free core.
+// Adaptly Agent Engine.
 // OBSERVE → DIAGNOSE → DECIDE. Turns saved student data into a
 // mastery model, skill priorities, a Next Best Action, and a
-// Today's Mission. No Gemini call happens here; the engine is the
-// source of truth and works fully offline (accessibility).
+// Today's Mission. This ranking feeds the AI Study Planner, which
+// writes the student's full plan.
 // ============================================================
 
 // Canonical SAT taxonomy — MUST match the SKILLS strings used across the app
@@ -69,7 +69,7 @@ const withinDays = (dateStr, days) => {
 };
 
 // ---- MASTERY UPDATE -----------------------------------------------------
-// Recomputes the mastery map from all evidence. Deterministic and idempotent:
+// Recomputes the mastery map from all evidence. Idempotent:
 // given the same inputs it always yields the same output, so it can run after
 // every new piece of evidence without drift.
 //
@@ -165,7 +165,7 @@ export function recomputeMastery({ mastery, attempts = [], mistakes = [], practi
 }
 
 // ---- PRIORITY ENGINE ----------------------------------------------------
-// Deterministic weighted score per skill (per spec §3). Higher = more urgent.
+// Weighted score per skill (per spec §3). Higher = more urgent.
 // Weights: 35 mastery weakness, 25 recent mistakes, 15 incorrect rate,
 // 10 low confidence, 10 recency, 5 time pressure.
 const PRIORITY_WEIGHTS = {
@@ -249,7 +249,7 @@ const START_DIFFICULTY_BY_STATUS = {
 export function nextBestAction({ priorities, mistakes = [], attempts = [] }) {
   const enoughData = attempts.length > 0 || mistakes.length > 0;
   if (!enoughData || !priorities || priorities.length === 0) {
-    return { kind: "diagnostic", reason: "Complete a diagnostic practice session so SATGene can identify your priorities." };
+    return { kind: "diagnostic", reason: "Complete a diagnostic practice session so Adaptly can identify your priorities." };
   }
 
   // Don't invent a skill weakness from a section score alone. If we have test
@@ -270,7 +270,7 @@ export function nextBestAction({ priorities, mistakes = [], attempts = [] }) {
       return {
         kind: "sectionDiagnostic",
         section: weakerSection,
-        reason: `We have your ${weakerSection} section score, but not enough skill-level evidence yet. Complete a short diagnostic so SATGene can identify the specific area to work on next.`,
+        reason: `We have your ${weakerSection} section score, but not enough skill-level evidence yet. Complete a short diagnostic so Adaptly can identify the specific area to work on next.`,
         questionCount: 6,
         minutes: 15,
         startDifficulty: "medium",

@@ -1,7 +1,7 @@
 // ============================================================
-// SATGene Original Question Bank (Phase 2)
+// Adaptly Original Question Bank (Phase 2)
 // ------------------------------------------------------------
-// Every question, passage, and answer choice below is written by SATGene —
+// Every question, passage, and answer choice below is written by Adaptly —
 // none of it is copied, paraphrased, or adapted from College Board, Khan
 // Academy, Bluebook, or any paid vendor. This bank exists ONLY to power the
 // agent's adaptive practice loop and the Socratic tutor; it is intentionally
@@ -19,7 +19,7 @@
 //   choices       array of 4 answer strings
 //   correctIndex  0-3
 //   hints         exactly 4 strings, least → most revealing (Socratic ladder)
-//   explanation   full worked explanation — the Instant (no-AI) fallback for "Explain"
+//   explanation   full worked explanation — the built-in fallback for "Explain"
 // ============================================================
 
 export const DIFFICULTIES = ["easy", "medium", "hard"];
