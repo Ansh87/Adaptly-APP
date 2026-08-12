@@ -1,7 +1,7 @@
 // Netlify Function: POST /api/tutor
 // Powers the "Explain" side of the Socratic tutor in adaptive practice. The
 // four Socratic hint levels ("Guide Me") are answered entirely from the local
-// question bank (src/questionBank.js) with zero AI calls — this function is
+// question bank (src/questionBank.js) — this function is
 // only reached when the student asks for a fuller, personalized explanation.
 //
 // Mirrors netlify/functions/plan.js's security pattern exactly: the Gemini API
@@ -23,15 +23,27 @@ export default async (req) => {
     return json({ error: "Use POST" }, 405);
   }
 
-  // Fix 8: never spend a Gemini call for an unauthenticated caller.
-  let authResult;
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "Invalid JSON body" }, 400);
+  }
+
+  // Fix 8: never spend a Gemini call for an unauthenticated caller — except
+  // Demo Student mode (see the matching note in plan.js: client-supplied flag,
+  // re-lock before a public launch).
+  let authResult = null;
+  let authError = null;
   try {
     authResult = await verifyRequestAuth(req);
   } catch (e) {
+    authError = e;
     console.error("[tutor] Auth verification unavailable:", e?.message || e);
-    return json({ error: "Sign-in verification is not configured on the server." }, 500);
   }
-  if (!authResult) {
+  const isDemo = body?.demo === true;
+  if (!authResult && !isDemo) {
+    if (authError) return json({ error: "Sign-in verification is not configured on the server." }, 500);
     return json({ error: "Sign in required." }, 401);
   }
 
@@ -40,13 +52,6 @@ export default async (req) => {
     // Never log the key; this branch means it's simply absent.
     console.error("[tutor] GEMINI_API_KEY is not set on the server");
     return json({ error: "AI tutor is not configured." }, 500);
-  }
-
-  let body;
-  try {
-    body = await req.json();
-  } catch {
-    return json({ error: "Invalid JSON body" }, 400);
   }
 
   const {
